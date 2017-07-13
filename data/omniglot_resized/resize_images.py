@@ -1,10 +1,12 @@
 """
 Usage instructions:
-    First download the omniglot dataset and put it in data/omniglot/
+    First download the omniglot dataset 
+    and put the contents of both images_background and images_evaluation in data/omniglot/ (without the root folder)
 
     Then, run the following:
-    cd data/omniglot_resized/
+    cd data/
     cp -r omniglot/* omniglot_resized/
+    cd omniglot_resized/
     python resize_images.py
 """
 from PIL import Image
@@ -23,5 +25,5 @@ for image_file in all_images:
     i += 1
 
     if i % 200 == 0:
-        print i
+        print(i)
 
