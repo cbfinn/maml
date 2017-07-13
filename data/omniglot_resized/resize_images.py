@@ -1,7 +1,7 @@
 """
 Usage instructions:
     First download the omniglot dataset 
-    and put both images_background and images_evaluation in data/omniglot/ (without the root folder)
+    and put the contents of both images_background and images_evaluation in data/omniglot/ (without the root folder)
 
     Then, run the following:
     cd data/
