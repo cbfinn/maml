@@ -40,14 +40,6 @@ class MAML:
             self.img_size = int(np.sqrt(self.dim_input/self.channels))
         else:
             raise ValueError('Unrecognized data source.')
-        if FLAGS.baseline and FLAGS.baseline == 'context_vector':
-            if FLAGS.conv and self.classification:
-                context_channels = 3
-                self.context_size = [self.dim_input*context_channels]
-                self.channels += context_channels
-            else:
-                self.context_size = [5]
-                self.dim_input += self.context_size[0]
 
     def construct_model(self, input_tensors=None, prefix='metatrain_'):
         # a: training data for inner gradient, b: test data for meta gradient
@@ -69,9 +61,6 @@ class MAML:
             else:
                 # Define the weights
                 self.weights = weights = self.construct_weights()
-                if FLAGS.baseline and 'context_vector' == FLAGS.baseline:
-                    self.weights['context_var'] = tf.get_variable('context_var', [1]+self.context_size, initializer=tf.contrib.layers.xavier_initializer())
-                    weights['context_var'] = self.weights['context_var']
 
             # outputbs[i] and lossesb[i] is the output and loss after i+1 gradient updates
             lossesa, outputas, lossesb, outputbs = [], [], [], []
@@ -182,9 +171,6 @@ class MAML:
         return weights
 
     def forward_fc(self, inp, weights, reuse=False):
-        if FLAGS.baseline and 'context_vector' == FLAGS.baseline:
-            context = tf.tile(weights['context_var'], [FLAGS.update_batch_size, 1])
-            inp = tf.concat([inp, context], 1)
         hidden = normalize(tf.matmul(inp, weights['w1']) + weights['b1'], activation=tf.nn.relu, reuse=reuse, scope='0')
         for i in range(1,len(self.dim_hidden)):
             hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.nn.relu, reuse=reuse, scope=str(i+1))
@@ -217,16 +203,8 @@ class MAML:
 
     def forward_conv(self, inp, weights, reuse=False, scope=''):
         # reuse is for the normalization parameters.
-        if FLAGS.baseline and 'context_vector' == FLAGS.baseline:
-            channels = self.channels - 3  #self.context_size[-1]
-            context = tf.tile(weights['context_var'], [FLAGS.update_batch_size*FLAGS.num_classes, 1])  #
-            context = tf.reshape(context, [FLAGS.update_batch_size*FLAGS.num_classes, self.img_size,self.img_size,3])
-        else:
-            channels = self.channels
+        channels = self.channels
         inp = tf.reshape(inp, [-1, self.img_size, self.img_size, channels])
-
-        if FLAGS.baseline and 'context_vector' == FLAGS.baseline:
-            inp = tf.concat([inp, context], 3)
 
         hidden1 = conv_block(inp, weights['conv1'], weights['b1'], reuse, scope+'0')
         hidden2 = conv_block(hidden1, weights['conv2'], weights['b2'], reuse, scope+'1')
