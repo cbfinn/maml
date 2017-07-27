@@ -283,7 +283,8 @@ def main():
         input_tensors = None
 
     model = MAML(dim_input, dim_output, test_num_updates=test_num_updates)
-    model.construct_model(input_tensors=input_tensors, prefix='metatrain_')
+    if FLAGS.train or not tf_data_load:
+        model.construct_model(input_tensors=input_tensors, prefix='metatrain_')
     if tf_data_load:
         model.construct_model(input_tensors=metaval_input_tensors, prefix='metaval_')
     model.summ_op = tf.summary.merge_all()
