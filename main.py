@@ -172,10 +172,6 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
         if 'generate' not in dir(data_generator):
             feed_dict = {}
             feed_dict = {model.meta_lr : 0.0}
-            if model.classification:
-                result = sess.run([model.metaval_total_accuracy1] + model.metaval_total_accuracies2, feed_dict)
-            else:
-                assert False
         else:
             batch_x, batch_y, amp, phase = data_generator.generate(train=False)
 
