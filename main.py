@@ -188,7 +188,7 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
             feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb, model.meta_lr: 0.0}
 
         if model.classification:
-            result = sess.run([model.total_accuracy1] + model.total_accuracies2, feed_dict)
+            result = sess.run([model.metaval_total_accuracy1] + model.metaval_total_accuracies2, feed_dict)
         else:  # this is for sinusoid
             result = sess.run([model.total_loss1] +  model.total_losses2, feed_dict)
         metaval_accuracies.append(result)
@@ -203,7 +203,7 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
 
     out_filename = FLAGS.logdir +'/'+ exp_string + '/' + 'test_ubs' + str(FLAGS.update_batch_size) + '_stepsize' + str(FLAGS.update_lr) + '.csv'
     out_pkl = FLAGS.logdir +'/'+ exp_string + '/' + 'test_ubs' + str(FLAGS.update_batch_size) + '_stepsize' + str(FLAGS.update_lr) + '.pkl'
-    with open(out_pkl, 'w') as f:
+    with open(out_pkl, 'wb') as f:
         pickle.dump({'mses': metaval_accuracies}, f)
     with open(out_filename, 'w') as f:
         writer = csv.writer(f, delimiter=',')
