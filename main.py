@@ -36,10 +36,16 @@ from tensorflow.python.platform import flags
 FLAGS = flags.FLAGS
 
 ## Dataset/method options
-flags.DEFINE_string('datasource', 'sinusoid', 'sinusoid or omniglot or miniimagenet')
+flags.DEFINE_string('datasource', 'sinusoid', 'sinusoid or omniglot or miniimagenet or siamese_omniglot')
 flags.DEFINE_integer('num_classes', 5, 'number of classes used in classification (e.g. 5-way classification).')
 # oracle means task id is input (only suitable for sinusoid)
-flags.DEFINE_string('baseline', None, 'oracle, or None')
+flags.DEFINE_string('baseline', None, 'oracle, online, incl_task, or None')
+flags.DEFINE_bool('context_var', False, 'whether or not to include context variable to append to input')
+
+flags.DEFINE_bool('update_bn', False, 'whether or not to update the batch normalization variables in the inner update')
+flags.DEFINE_bool('update_bn_only', False, 'whether or not to *only* update the batch normalization variables in the inner update')
+
+flags.DEFINE_bool('alternate_grad_meta', False, 'whether or not to alternate between plain GD steps and meta-GD steps')
 
 ## Training options
 flags.DEFINE_integer('pretrain_iterations', 0, 'number of pre-training iterations.')
@@ -53,6 +59,7 @@ flags.DEFINE_integer('num_updates', 1, 'number of inner gradient updates during 
 ## Model options
 flags.DEFINE_string('norm', 'batch_norm', 'batch_norm, layer_norm, or None')
 flags.DEFINE_integer('num_filters', 64, 'number of filters for conv nets -- 32 for miniimagenet, 64 for omiglot.')
+flags.DEFINE_integer('fc_hidden', 40, 'number of hidden units for fc nets.')
 flags.DEFINE_bool('conv', True, 'whether or not to use a convolutional network, only applicable in some cases')
 flags.DEFINE_bool('max_pool', False, 'Whether or not to use max pooling rather than strided convolutions')
 flags.DEFINE_bool('stop_grad', False, 'if True, do not use second derivatives in meta-optimization (for speed)')
@@ -90,11 +97,16 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         if 'generate' in dir(data_generator):
             batch_x, batch_y, amp, phase = data_generator.generate()
 
-            if FLAGS.baseline == 'oracle':
-                batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
-                for i in range(FLAGS.meta_batch_size):
-                    batch_x[i, :, 1] = amp[i]
-                    batch_x[i, :, 2] = phase[i]
+            if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline=='incl_task':
+                if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
+                  batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
+                  for i in range(FLAGS.meta_batch_size):
+                      batch_x[i, :, 1] = amp[i]
+                      batch_x[i, :, 2] = phase[i]
+            if FLAGS.baseline == 'online' and itr % 2 == 1:
+                batch_x, batch_y, amp, phase = last_batch
+            elif FLAGS.baseline == 'online':
+                last_batch = batch_x, batch_y, amp, phase
 
             inputa = batch_x[:, :num_classes*FLAGS.update_batch_size, :]
             labela = batch_y[:, :num_classes*FLAGS.update_batch_size, :]
@@ -102,7 +114,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
             labelb = batch_y[:, num_classes*FLAGS.update_batch_size:, :]
             feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb}
 
-        if itr < FLAGS.pretrain_iterations:
+        if itr < FLAGS.pretrain_iterations or (FLAGS.baseline == 'online' and itr % 2 == 1) or (FLAGS.alternate_grad_meta and itr % 2 == 1):
             input_tensors = [model.pretrain_op]
         else:
             input_tensors = [model.metatrain_op]
@@ -175,10 +187,11 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
         else:
             batch_x, batch_y, amp, phase = data_generator.generate(train=False)
 
-            if FLAGS.baseline == 'oracle': # NOTE - this flag is specific to sinusoid
-                batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
-                batch_x[0, :, 1] = amp[0]
-                batch_x[0, :, 2] = phase[0]
+            if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline == 'incl_task':
+                if FLAGS.datasource == 'sinusoid':
+                    batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
+                    batch_x[0, :, 1] = amp[0]
+                    batch_x[0, :, 2] = phase[0]
 
             inputa = batch_x[:, :num_classes*FLAGS.update_batch_size, :]
             inputb = batch_x[:,num_classes*FLAGS.update_batch_size:, :]
@@ -188,7 +201,7 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
             feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb, model.meta_lr: 0.0}
 
         if model.classification:
-            result = sess.run([model.total_accuracy1] + model.total_accuracies2, feed_dict)
+            result = sess.run([model.metaval_total_accuracy1] + model.metaval_total_accuracies2, feed_dict)
         else:  # this is for sinusoid
             result = sess.run([model.total_loss1] +  model.total_losses2, feed_dict)
         metaval_accuracies.append(result)
@@ -242,23 +255,27 @@ def main():
         else:
             if FLAGS.datasource == 'miniimagenet': # TODO - use 15 val examples for imagenet?
                 if FLAGS.train:
-                    data_generator = DataGenerator(FLAGS.update_batch_size+15, FLAGS.meta_batch_size)  # only use one datapoint for testing to save memory
+                    data_generator = DataGenerator(FLAGS.update_batch_size+15, FLAGS.meta_batch_size)
                 else:
-                    data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)  # only use one datapoint for testing to save memory
+                    data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)
             else:
-                data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)  # only use one datapoint for testing to save memory
+                data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)
 
 
     dim_output = data_generator.dim_output
-    if FLAGS.baseline == 'oracle':
-        assert FLAGS.datasource == 'sinusoid'
-        dim_input = 3
-        FLAGS.pretrain_iterations += FLAGS.metatrain_iterations
-        FLAGS.metatrain_iterations = 0
+    if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline == 'incl_task':
+        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource
+        if FLAGS.datasource == 'sinusoid':
+            dim_input = 3
+        else:
+            dim_input = data_generator.dim_input
+        if FLAGS.baseline == 'oracle':
+            FLAGS.pretrain_iterations += FLAGS.metatrain_iterations
+            FLAGS.metatrain_iterations = 0
     else:
         dim_input = data_generator.dim_input
 
-    if FLAGS.datasource == 'miniimagenet' or FLAGS.datasource == 'omniglot':
+    if FLAGS.datasource == 'miniimagenet' or FLAGS.datasource == 'omniglot': # not including siamese omniglot
         tf_data_load = True
         num_classes = data_generator.num_classes
 
@@ -302,16 +319,26 @@ def main():
     if FLAGS.train_update_lr == -1:
         FLAGS.train_update_lr = FLAGS.update_lr
 
-    exp_string = 'cls_'+str(FLAGS.num_classes)+'.mbs_'+str(FLAGS.meta_batch_size) + '.ubs_' + str(FLAGS.train_update_batch_size) + '.numstep' + str(FLAGS.num_updates) + '.updatelr' + str(FLAGS.train_update_lr)
+    exp_string = 'cls_'+str(FLAGS.num_classes)+'.mbs_'+str(FLAGS.meta_batch_size) + '.ubs_' + str(FLAGS.train_update_batch_size) + '.numstep' + str(FLAGS.num_updates) + '.updatelr' + str(FLAGS.train_update_lr) +'.metalr' + str(FLAGS.meta_lr)
 
     if FLAGS.num_filters != 64:
         exp_string += 'hidden' + str(FLAGS.num_filters)
+    if FLAGS.fc_hidden != 40:
+        exp_string += 'hidden' + str(FLAGS.fc_hidden)
     if FLAGS.max_pool:
         exp_string += 'maxpool'
     if FLAGS.stop_grad:
         exp_string += 'stopgrad'
+    if FLAGS.alternate_grad_meta:
+        exp_string += '.alternate.'
     if FLAGS.baseline:
         exp_string += FLAGS.baseline
+    if FLAGS.context_var:
+        exp_string += 'context_fc'
+    if FLAGS.update_bn or FLAGS.update_bn_only: # update bn vars in update
+        exp_string += 'updatebn'
+        if FLAGS.update_bn_only:
+            exp_string += 'only'
     if FLAGS.norm == 'batch_norm':
         exp_string += 'batchnorm'
     elif FLAGS.norm == 'layer_norm':
@@ -320,6 +347,7 @@ def main():
         exp_string += 'nonorm'
     else:
         print('Norm setting not recognized.')
+    exp_string += 'conv13doublin'
 
     resume_itr = 0
     model_file = None

@@ -2,6 +2,8 @@
 import numpy as np
 import os
 import random
+from scipy.misc import imread, imresize
+from scipy.ndimage import rotate, shift
 import tensorflow as tf
 
 from tensorflow.contrib.layers.python import layers as tf_layers
@@ -23,22 +25,27 @@ def get_images(paths, labels, nb_samples=None, shuffle=True):
     return images
 
 ## Network helpers
-def conv_block(inp, cweight, bweight, reuse, scope, activation=tf.nn.relu, max_pool_pad='VALID', residual=False):
+def conv_block(inp, cweight, bweight, reuse, scope, bn_vars=None, incl_stride=True, activation=tf.nn.relu):
     """ Perform, conv, batch norm, nonlinearity, and max pool """
     stride, no_stride = [1,2,2,1], [1,1,1,1]
 
-    if FLAGS.max_pool:
+    if FLAGS.max_pool or not incl_stride:
         conv_output = tf.nn.conv2d(inp, cweight, no_stride, 'SAME') + bweight
     else:
         conv_output = tf.nn.conv2d(inp, cweight, stride, 'SAME') + bweight
-    normed = normalize(conv_output, activation, reuse, scope)
-    if FLAGS.max_pool:
-        normed = tf.nn.max_pool(normed, stride, stride, max_pool_pad)
+    normed = normalize(conv_output, activation, reuse, scope, bn_vars=bn_vars)
+    if FLAGS.max_pool and incl_stride:
+        normed = tf.nn.max_pool(normed, stride, stride, 'VALID')
     return normed
 
-def normalize(inp, activation, reuse, scope):
+def normalize(inp, activation, reuse, scope, bn_vars=None):
     if FLAGS.norm == 'batch_norm':
-        return tf_layers.batch_norm(inp, activation_fn=activation, reuse=reuse, scope=scope)
+        if bn_vars == None:
+            return tf_layers.batch_norm(inp, activation_fn=activation, reuse=reuse, scope=scope)
+        else:
+            scale, offset = bn_vars
+            normed = tf_layers.batch_norm(inp, activation_fn=activation, reuse=reuse, scope=scope, scale=False, center=False)
+            return offset+normed*scale # TODO
     elif FLAGS.norm == 'layer_norm':
         return tf_layers.layer_norm(inp, activation_fn=activation, reuse=reuse, scope=scope)
     elif FLAGS.norm == 'None':
@@ -53,5 +60,23 @@ def mse(pred, label):
 def xent(pred, label):
     # Note - with tf version <=0.12, this loss has incorrect 2nd derivatives
     return tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size
+
+def sigmoid_xent(pred, label):
+    return tf.nn.sigmoid_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size
+
+
+def load_transform(image_path, angle=0., s=(0, 0), size=(20, 20)):
+  # Load the image
+  original = imread(image_path, flatten=True)
+  # Rotate the image
+  rotated = rotate(original, angle=angle, cval=1.)
+  # Shift the image
+  shifted = shift(rotated, shift=s)
+  # Resize the image
+  resized = np.asarray(imresize(rotated, size=size, interp='lanczos'), dtype=np.float32) / 255.
+  #return resized
+  # Invert the image
+  inverted = 1. - resized
+  return inverted
 
 
