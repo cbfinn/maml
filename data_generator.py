@@ -49,9 +49,9 @@ class DataGenerator(object):
             num_train = config.get('num_train', 1200) - num_val
             self.metatrain_character_folders = character_folders[:num_train]
             if FLAGS.test_set:
-                self.metaval_character_folders = character_folders[num_train:num_train+num_val]
-            else:
                 self.metaval_character_folders = character_folders[num_train+num_val:]
+            else:
+                self.metaval_character_folders = character_folders[num_train:num_train+num_val]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
         elif FLAGS.datasource == 'miniimagenet':
             self.num_classes = config.get('num_classes', FLAGS.num_classes)
@@ -172,4 +172,3 @@ class DataGenerator(object):
                 init_inputs[:,input_idx:,0] = np.linspace(self.input_range[0], self.input_range[1], num=self.num_samples_per_class-input_idx, retstep=False)
             outputs[func] = amp[func] * np.sin(init_inputs[func]-phase[func])
         return init_inputs, outputs, amp, phase
-
