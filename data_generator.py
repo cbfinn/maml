@@ -31,6 +31,7 @@ class DataGenerator(object):
         if FLAGS.datasource == 'sinusoid':
             self.generate = self.generate_sinusoid_batch
             self.amp_range = config.get('amp_range', [0.1, 5.0])
+            #self.amp_range = config.get('amp_range', [5.0, 10.0])
             self.phase_range = config.get('phase_range', [0, np.pi])
             self.input_range = config.get('input_range', [-5.0, 5.0])
             self.dim_input = 1
@@ -61,7 +62,8 @@ class DataGenerator(object):
             self.num_classes = 10
             self.T = np.array([[1, 0,-14],[0, 1,-14],[0, 0, 1]])
             self.invT = np.linalg.inv(self.T)
-            self.mnist = input_data.read_data_sets('/raid/cfinn/mnist_data', one_hot=True)
+            #self.mnist = input_data.read_data_sets('/raid/cfinn/mnist_data', one_hot=True)
+            self.mnist = input_data.read_data_sets('/raid/cfinn/mnist_data', one_hot=False)
 
         elif 'omniglot' in FLAGS.datasource:
             self.num_classes = config.get('num_classes', FLAGS.num_classes)
@@ -218,6 +220,32 @@ class DataGenerator(object):
         return tform
 
     def generate_mnist_batch(self, train=True):
+        #from tensorflow.examples.tutorials.mnist import input_data
+        #mnist = input_data.read_data_sets(self.data_folder, one_hot=False)
+        mnist = self.mnist
+
+        inputs = np.zeros([self.batch_size, self.num_classes * self.num_samples_per_task, self.dim_input], dtype=np.float32)
+        outputs = np.zeros([self.batch_size, self.num_classes * self.num_samples_per_task, self.dim_output], dtype=np.int32)
+
+        assert self.num_classes == 10
+
+        for i in range(self.batch_size):
+            first_set, others = [], []
+            for j in range(self.num_classes):
+                #examples =  np.nonzero(np.all(mnist.train.labels == np.array([int(ind == j) for ind in range(10)]), axis=1))
+                examples =  np.nonzero(mnist.train.labels == j)
+                inds = np.random.choice(examples[0], size=self.num_samples_per_task, replace=False)
+                first_set.append(inds[0])
+                others.extend(inds[1:])
+            random.shuffle(first_set)
+            random.shuffle(others)
+            indices = first_set + others
+            inputs[i] = mnist.train.images[indices,:] # maybe invert
+            outputs[i, np.arange(self.num_classes*self.num_samples_per_task), mnist.train.labels[indices]] = 1.0
+        return inputs, outputs, None, None
+
+    """
+    def generate_mnist_batch(self, train=True):
 
         batch_size = self.batch_size
         inputs = np.zeros([batch_size, self.num_samples_per_task, self.dim_input], dtype=np.float32)
@@ -234,9 +262,7 @@ class DataGenerator(object):
             inputs[i] = tformed
             outputs[i] = task_labels
         return inputs, outputs, None, None
-
-
-
+    """
 
 
     def generate_omniglot_batch(self, train=True):

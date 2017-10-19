@@ -45,6 +45,8 @@ flags.DEFINE_bool('context_var', False, 'whether or not to include context varia
 flags.DEFINE_bool('update_bn', False, 'whether or not to update the batch normalization variables in the inner update')
 flags.DEFINE_bool('update_bn_only', False, 'whether or not to *only* update the batch normalization variables in the inner update')
 
+flags.DEFINE_bool('nearest_neighbor', False, 'test time only - eval classification using nearest neighbor in pixel space')
+
 flags.DEFINE_bool('alternate_grad_meta', False, 'whether or not to alternate between plain GD steps and meta-GD steps')
 
 ## Training options
@@ -60,6 +62,8 @@ flags.DEFINE_integer('num_updates', 1, 'number of inner gradient updates during 
 flags.DEFINE_string('norm', 'batch_norm', 'batch_norm, layer_norm, or None')
 flags.DEFINE_integer('num_filters', 64, 'number of filters for conv nets -- 32 for miniimagenet, 64 for omiglot.')
 flags.DEFINE_integer('fc_hidden', 40, 'number of hidden units for fc nets.')
+flags.DEFINE_integer('num_fc', 2, 'number of fc hidden layers for fc nets.')
+flags.DEFINE_integer('fc_linear', 0, 'number of fc hidden layers that should be linear for fc nets.')
 flags.DEFINE_bool('conv', True, 'whether or not to use a convolutional network, only applicable in some cases')
 flags.DEFINE_bool('max_pool', False, 'Whether or not to use max pooling rather than strided convolutions')
 flags.DEFINE_bool('stop_grad', False, 'if True, do not use second derivatives in meta-optimization (for speed)')
@@ -150,6 +154,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                 feed_dict = {}
                 if model.classification:
                     input_tensors = [model.metaval_total_accuracy1, model.metaval_total_accuracies2[FLAGS.num_updates-1], model.summ_op]
+                    #input_tensors = [model.total_accuracy1, model.total_accuracies2[FLAGS.num_updates-1], model.summ_op]
                 else:
                     input_tensors = [model.metaval_total_loss1, model.metaval_total_losses2[FLAGS.num_updates-1], model.summ_op]
             else:
@@ -198,13 +203,32 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
             labela = batch_y[:, :num_classes*FLAGS.update_batch_size, :]
             labelb = batch_y[:,num_classes*FLAGS.update_batch_size:, :]
 
-            feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb, model.meta_lr: 0.0}
+            # nearest neighbor code:
+            num_right = 0
+            num_total = 0
+            if FLAGS.nearest_neighbor:
+                for i in range(num_classes):
+                    test_img = inputb[:,i,:]
+                    test_label = labelb[0,i]
+                    diff = np.mean( (test_img - inputa)**2, axis=2)
+                    idx = np.argmin(diff)
+                    train_label = labela[0,idx]
+                    if np.all(train_label == test_label):
+                        num_right += 1
+                    num_total += 1
+                metaval_accuracies.append(float(num_right) / num_total)
+            else:
+                feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb, model.meta_lr: 0.0}
 
-        if model.classification:
-            result = sess.run([model.metaval_total_accuracy1] + model.metaval_total_accuracies2, feed_dict)
-        else:  # this is for sinusoid
-            result = sess.run([model.total_loss1] +  model.total_losses2, feed_dict)
-        metaval_accuracies.append(result)
+        if not FLAGS.nearest_neighbor:
+            if model.classification:
+                if 'generate' not in dir(data_generator):
+                    result = sess.run([model.metaval_total_accuracy1] + model.metaval_total_accuracies2, feed_dict)
+                else:
+                    result = sess.run([model.total_accuracy1] + model.total_accuracies2, feed_dict)
+            else:  # this is for sinusoid
+                result = sess.run([model.total_loss1] +  model.total_losses2, feed_dict)
+            metaval_accuracies.append(result)
 
     metaval_accuracies = np.array(metaval_accuracies)
     means = np.mean(metaval_accuracies, 0)
@@ -230,7 +254,7 @@ def main():
         if FLAGS.train:
             test_num_updates = 5
         else:
-            test_num_updates = 10
+            test_num_updates = 100  # normally 10
     else:
         if FLAGS.datasource == 'miniimagenet':
             if FLAGS.train == True:
@@ -238,7 +262,10 @@ def main():
             else:
                 test_num_updates = 10
         else:
-            test_num_updates = 10
+            if FLAGS.train == True:
+                test_num_updates = 10
+            else:
+                test_num_updates = 1 # 50
 
     if FLAGS.train == False:
         orig_meta_batch_size = FLAGS.meta_batch_size
@@ -325,6 +352,13 @@ def main():
         exp_string += 'hidden' + str(FLAGS.num_filters)
     if FLAGS.fc_hidden != 40:
         exp_string += 'hidden' + str(FLAGS.fc_hidden)
+    if FLAGS.num_fc != 2:
+        exp_string += 'numfc' + str(FLAGS.num_fc)
+    if FLAGS.fc_linear != 0:
+        exp_string += 'fclin' + str(FLAGS.fc_linear)
+    exp_string += ''
+
+
     if FLAGS.max_pool:
         exp_string += 'maxpool'
     if FLAGS.stop_grad:
@@ -347,7 +381,7 @@ def main():
         exp_string += 'nonorm'
     else:
         print('Norm setting not recognized.')
-    exp_string += 'conv13doublin'
+    #exp_string += 'conv13doublin'
 
     resume_itr = 0
     model_file = None
@@ -360,6 +394,7 @@ def main():
         if FLAGS.test_iter > 0:
             model_file = model_file[:model_file.index('model')] + 'model' + str(FLAGS.test_iter)
         if model_file:
+            import pdb; pdb.set_trace()
             ind1 = model_file.index('model')
             resume_itr = int(model_file[ind1+5:])
             print("Restoring model weights from " + model_file)

@@ -18,7 +18,7 @@ class MAML:
         self.classification = False
         self.test_num_updates = test_num_updates
         if FLAGS.datasource == 'sinusoid':
-            self.dim_hidden = [FLAGS.fc_hidden, FLAGS.fc_hidden]
+            self.dim_hidden = [FLAGS.fc_hidden]*FLAGS.num_fc
             self.loss_func = mse
             self.forward = self.forward_fc
             self.construct_weights = self.construct_fc_weights
@@ -52,7 +52,7 @@ class MAML:
                 self.context_size = [10]
                 #self.channels += 10
             else:
-                self.context_size = [50]
+                self.context_size = [10]
                 self.dim_input += self.context_size[0]
 
     def construct_model(self, input_tensors=None, prefix='metatrain_'):
@@ -204,13 +204,22 @@ class MAML:
 
     ### Network construction functions (fc networks and conv networks)
     def construct_fc_weights(self):
+        dtype = tf.float32
+        fc_init =  tf.contrib.layers.xavier_initializer(dtype=dtype)
         weights = {}
-        weights['w1'] = tf.Variable(tf.truncated_normal([self.dim_input, self.dim_hidden[0]], stddev=0.01))
+        #weights['w1'] = tf.Variable(tf.truncated_normal([self.dim_input, self.dim_hidden[0]], stddev=0.01))
+        weights['w1'] = tf.Variable(fc_init([self.dim_input, self.dim_hidden[0]]))
         weights['b1'] = tf.Variable(tf.zeros([self.dim_hidden[0]]))
         for i in range(1,len(self.dim_hidden)):
-            weights['w'+str(i+1)] = tf.Variable(tf.truncated_normal([self.dim_hidden[i-1], self.dim_hidden[i]], stddev=0.01))
+            if i <= FLAGS.fc_linear:
+                #weights['w'+str(i+1)] = tf.Variable(tf.truncated_normal([self.dim_hidden[i-1], self.dim_hidden[i]], stddev=0.01/FLAGS.fc_linear))
+                weights['w'+str(i+1)] = tf.Variable(fc_init([self.dim_hidden[i-1], self.dim_hidden[i]]))
+            else:
+                #weights['w'+str(i+1)] = tf.Variable(tf.truncated_normal([self.dim_hidden[i-1], self.dim_hidden[i]], stddev=0.01))
+                weights['w'+str(i+1)] = tf.Variable(fc_init([self.dim_hidden[i-1], self.dim_hidden[i]]))
             weights['b'+str(i+1)] = tf.Variable(tf.zeros([self.dim_hidden[i]]))
-        weights['w'+str(len(self.dim_hidden)+1)] = tf.Variable(tf.truncated_normal([self.dim_hidden[-1], self.dim_output], stddev=0.01))
+        #weights['w'+str(len(self.dim_hidden)+1)] = tf.Variable(tf.truncated_normal([self.dim_hidden[-1], self.dim_output], stddev=0.01))
+        weights['w'+str(len(self.dim_hidden)+1)] = tf.Variable(fc_init([self.dim_hidden[-1], self.dim_output]))
         weights['b'+str(len(self.dim_hidden)+1)] = tf.Variable(tf.zeros([self.dim_output]))
         return weights
 
@@ -222,7 +231,10 @@ class MAML:
             inp = tf.concat([inp, context], 1)
         hidden = normalize(tf.matmul(inp, weights['w1']) + weights['b1'], activation=tf.nn.relu, reuse=reuse, scope='0')
         for i in range(1,len(self.dim_hidden)):
-            hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.nn.relu, reuse=reuse, scope=str(i+1))
+            if i <= FLAGS.fc_linear:
+                hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.identity, reuse=reuse, scope=str(i+1))
+            else:
+                hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.nn.relu, reuse=reuse, scope=str(i+1))
         return tf.matmul(hidden, weights['w'+str(len(self.dim_hidden)+1)]) + weights['b'+str(len(self.dim_hidden)+1)]
 
     def construct_conv_weights(self):
