@@ -4,7 +4,8 @@ import numpy as np
 import tensorflow as tf
 
 from tensorflow.python.platform import flags
-from utils import mse, xent, conv_block, normalize, sigmoid_xent
+from utils import mse, l1_loss, xent, conv_block, normalize, sigmoid_xent
+from collections import OrderedDict
 
 FLAGS = flags.FLAGS
 
@@ -17,9 +18,14 @@ class MAML:
         self.meta_lr = tf.placeholder_with_default(FLAGS.meta_lr, ())
         self.classification = False
         self.test_num_updates = test_num_updates
-        if FLAGS.datasource == 'sinusoid':
+        self.inner_loss_func = None
+        if FLAGS.datasource == 'sinusoid' or FLAGS.datasource == 'polynomial':
             self.dim_hidden = [FLAGS.fc_hidden]*FLAGS.num_fc
-            self.loss_func = mse
+            if FLAGS.l1_loss:
+                self.inner_loss_func = l1_loss
+                self.loss_func = mse
+            else:
+                self.loss_func = mse
             self.forward = self.forward_fc
             self.construct_weights = self.construct_fc_weights
         elif 'omniglot' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist']:
@@ -45,12 +51,14 @@ class MAML:
             self.img_size = int(np.sqrt(self.dim_input/self.channels))
         else:
             raise ValueError('Unrecognized data source.')
+        if self.inner_loss_func is None:
+            self.inner_loss_func = self.loss_func
         if FLAGS.context_var:
             if FLAGS.conv and self.classification:
                 #context_channels = 3 # TODO - hardcoded
-                #self.context_size = [self.dim_input]
-                self.context_size = [10]
-                #self.channels += 10
+                self.context_size = [self.dim_input]
+                #self.context_size = [5]  # num channels
+                self.channels += 1
             else:
                 self.context_size = [10]
                 self.dim_input += self.context_size[0]
@@ -91,18 +99,28 @@ class MAML:
                 """ Perform gradient descent for one task in the meta-batch. """
                 inputa, inputb, labela, labelb = inp
                 task_outputbs, task_lossesb = [], []
+                task_outputas = []
+
+                if FLAGS.inner_sgd:
+                    c = self.dim_output * FLAGS.update_batch_size  # (num classes)
+                    inputas = [inputa[c*i:c*(i+1), :] for i in range(num_updates)]
+                    labelas = [labela[c*i:c*(i+1), :] for i in range(num_updates)]
+                else:
+                    inputas = [inputa]*num_updates
+                    labelas = [labela]*num_updates
 
                 if self.classification:
+                    task_accuraciesa = []
                     task_accuraciesb = []
 
-                task_outputa = self.forward(inputa, weights, reuse=reuse)  # only reuse on the first iter
-                task_lossa = self.loss_func(task_outputa, labela)
+                task_outputa = self.forward(inputas[0], weights, reuse=reuse)  # only reuse on the first iter
+                task_lossa = self.inner_loss_func(task_outputa, labelas[0])
 
                 grads = tf.gradients(task_lossa, list(weights.values()))
                 if FLAGS.stop_grad:
                     grads = [tf.stop_gradient(grad) for grad in grads]
-                gradients = dict(zip(weights.keys(), grads))
-                fast_weights = dict(zip(weights.keys(), [weights[key] - self.update_lr*gradients[key] for key in weights.keys()]))
+                gradients = OrderedDict(zip(weights.keys(), grads))
+                fast_weights = OrderedDict(zip(weights.keys(), [weights[key] - self.update_lr*gradients[key] for key in weights.keys()]))
 
                 if FLAGS.update_bn_only:
                     for key in weights.keys():
@@ -112,14 +130,16 @@ class MAML:
                 output = self.forward(inputb, fast_weights, reuse=True)
                 task_outputbs.append(output)
                 task_lossesb.append(self.loss_func(output, labelb))
+                outputa = self.forward(inputas[0], fast_weights, reuse=True)  # unnecessary but useful for stats
+                task_outputas.append(outputa)
 
                 for j in range(num_updates - 1):
-                    loss = self.loss_func(self.forward(inputa, fast_weights, reuse=True), labela)
+                    loss = self.inner_loss_func(self.forward(inputas[j+1], fast_weights, reuse=True), labelas[j+1])
                     grads = tf.gradients(loss, list(fast_weights.values()))
                     if FLAGS.stop_grad:
                         grads = [tf.stop_gradient(grad) for grad in grads]
-                    gradients = dict(zip(fast_weights.keys(), grads))
-                    fast_weights = dict(zip(fast_weights.keys(), [fast_weights[key] - self.update_lr*gradients[key] for key in fast_weights.keys()]))
+                    gradients = OrderedDict(zip(fast_weights.keys(), grads))
+                    fast_weights = OrderedDict(zip(fast_weights.keys(), [fast_weights[key] - self.update_lr*gradients[key] for key in fast_weights.keys()]))
 
                     if FLAGS.update_bn_only:
                         for key in weights.keys():
@@ -129,13 +149,19 @@ class MAML:
                     output = self.forward(inputb, fast_weights, reuse=True)
                     task_outputbs.append(output)
                     task_lossesb.append(self.loss_func(output, labelb))
+                    outputa = self.forward(inputa, fast_weights, reuse=True)
+                    task_outputas.append(outputa)
 
-                task_output = [task_outputa, task_outputbs, task_lossa, task_lossesb]
+                if FLAGS.max_ent:
+                    task_output = [list(fast_weights.values()), task_outputa, task_outputbs, task_lossa, task_lossesb]
+                else:
+                    task_output = [task_outputa, task_outputbs, task_lossa, task_lossesb]
 
                 if self.classification:
                     if 'siamese' not in FLAGS.datasource:
                         task_accuracya = tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_outputa), 1), tf.argmax(labela, 1))
                         for j in range(num_updates):
+                            task_accuraciesa.append(tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_outputas[j]), 1), tf.argmax(labela, 1)))
                             task_accuraciesb.append(tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_outputbs[j]), 1), tf.argmax(labelb, 1)))
                     else:
                         correct_pred = tf.equal(tf.cast(task_outputa > 0, tf.int32), tf.cast(labela, tf.int32))
@@ -143,7 +169,7 @@ class MAML:
                         for j in range(num_updates):
                             correct_pred = tf.equal(tf.cast(task_outputbs[j] > 0, tf.int32), tf.cast(labelb, tf.int32))
                             task_accuraciesb.append( tf.reduce_mean(tf.cast(correct_pred, tf.float32)) )
-                    task_output.extend([task_accuracya, task_accuraciesb])
+                    task_output.extend([task_accuracya, task_accuraciesb, task_accuraciesa])
 
                 return task_output
 
@@ -151,17 +177,37 @@ class MAML:
                 # to initialize the batch norm vars, might want to combine this, and not run idx 0 twice.
                 unused = task_metalearn((self.inputa[0], self.inputb[0], self.labela[0], self.labelb[0]), False)
 
-            out_dtype = [tf.float32, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates]
+            if FLAGS.max_ent:
+                out_dtype = [[tf.float32]*len(weights), tf.float32, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates]
+            else:
+                out_dtype = [tf.float32, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates]
             if self.classification:
-                out_dtype.extend([tf.float32, [tf.float32]*num_updates])
+                out_dtype.extend([tf.float32, [tf.float32]*num_updates, [tf.float32]*num_updates])
             result = tf.map_fn(task_metalearn, elems=(self.inputa, self.inputb, self.labela, self.labelb), dtype=out_dtype, parallel_iterations=FLAGS.meta_batch_size)
             if self.classification:
-                outputas, outputbs, lossesa, lossesb, accuraciesa, accuraciesb = result
+                if FLAGS.max_ent:
+                    all_fast_weights, outputas, outputbs, lossesa, lossesb, accuraciesa, accuraciesb, all_accuraciesa = result
+                else:
+                    outputas, outputbs, lossesa, lossesb, accuraciesa, accuraciesb, all_accuraciesa = result
             else:
-                outputas, outputbs, lossesa, lossesb  = result
+                if FLAGS.max_ent:
+                    all_fast_weights, outputas, outputbs, lossesa, lossesb  = result
+                else:
+                    outputas, outputbs, lossesa, lossesb  = result
 
         ## Performance & Optimization
         if 'train' in prefix:
+            if FLAGS.max_ent:
+                # TODO - diagonal approximation of covariance. Then take log determininant.
+                #import pdb; pdb.set_trace()  # check size of all_fast_weights
+                flattened_weights = tf.concat([tf.reshape(w, [-1, int(np.prod(w.shape[1:]))]) for w in all_fast_weights], 1)
+                mean, var = tf.nn.moments(flattened_weights, axes=0)
+                # TODO - try making this smaller and using meta-gradient clipping
+                eps = 1  # maybe make this a little bit bigger? or anneal it?
+                #var = tf.nn.relu(var - eps) + eps
+                var += eps
+                self.neg_entropy_estimate = neg_entropy_estimate = -tf.reduce_sum(tf.log(var))
+
             self.total_loss1 = total_loss1 = tf.reduce_sum(lossesa) / tf.to_float(FLAGS.meta_batch_size)
             self.total_losses2 = total_losses2 = [tf.reduce_sum(lossesb[j]) / tf.to_float(FLAGS.meta_batch_size) for j in range(num_updates)]
             # after the map_fn
@@ -169,6 +215,7 @@ class MAML:
             if self.classification:
                 self.total_accuracy1 = total_accuracy1 = tf.reduce_sum(accuraciesa) / tf.to_float(FLAGS.meta_batch_size)
                 self.total_accuracies2 = total_accuracies2 = [tf.reduce_sum(accuraciesb[j]) / tf.to_float(FLAGS.meta_batch_size) for j in range(num_updates)]
+                self.total_accuraciesa = total_accuraciesa = [tf.reduce_sum(all_accuraciesa[j]) / tf.to_float(FLAGS.meta_batch_size) for j in range(num_updates)]
             if FLAGS.baseline == 'online':
                 self.pretrain_op = tf.train.AdamOptimizer(self.update_lr).minimize(total_loss1)
             else:
@@ -176,9 +223,18 @@ class MAML:
 
             if FLAGS.metatrain_iterations > 0:
                 optimizer = tf.train.AdamOptimizer(self.meta_lr)
-                self.gvs = gvs = optimizer.compute_gradients(self.total_losses2[FLAGS.num_updates-1])
+                if FLAGS.zerok_shot:
+                    meta_objective = self.total_losses2[FLAGS.num_updates-1] + self.total_loss1
+                else:
+                    meta_objective = self.total_losses2[FLAGS.num_updates-1]
+                if FLAGS.max_ent:
+                    meta_objective += neg_entropy_estimate
+                self.gvs = gvs = optimizer.compute_gradients(meta_objective)
                 if FLAGS.datasource == 'miniimagenet':
                     gvs = [(tf.clip_by_value(grad, -10, 10), var) for grad, var in gvs]
+                if FLAGS.max_ent:
+                    #grad = tf.where(tf.is_nan(grad), tf.zeros_like(grad), grad)
+                    gvs = [(tf.clip_by_value(grad, -0.01, 0.01), var) for grad, var in gvs]
                 self.metatrain_op = optimizer.apply_gradients(gvs)
                 tf.summary.scalar(prefix+'Optimized loss', self.total_losses2[FLAGS.num_updates-1])
             else:
@@ -191,6 +247,7 @@ class MAML:
             if self.classification:
                 self.metaval_total_accuracy1 = total_accuracy1 = tf.reduce_sum(accuraciesa) / tf.to_float(FLAGS.meta_batch_size)
                 self.metaval_total_accuracies2 = total_accuracies2 =[tf.reduce_sum(accuraciesb[j]) / tf.to_float(FLAGS.meta_batch_size) for j in range(num_updates)]
+                self.metaval_total_accuraciesa = total_accuraciesa = [tf.reduce_sum(all_accuraciesa[j]) / tf.to_float(FLAGS.meta_batch_size) for j in range(num_updates)]
 
         ## Summaries
         tf.summary.scalar(prefix+'Pre-update loss', total_loss1)
@@ -229,12 +286,14 @@ class MAML:
         if FLAGS.context_var:
             context = tf.tile(weights['context_var'], [FLAGS.update_batch_size, 1])
             inp = tf.concat([inp, context], 1)
-        hidden = normalize(tf.matmul(inp, weights['w1']) + weights['b1'], activation=tf.nn.relu, reuse=reuse, scope='0')
+        #act = tf.nn.relu
+        act = tf.contrib.keras.layers.LeakyReLU()
+        hidden = normalize(tf.matmul(inp, weights['w1']) + weights['b1'], activation=act, reuse=reuse, scope='0')
         for i in range(1,len(self.dim_hidden)):
             if i <= FLAGS.fc_linear:
                 hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.identity, reuse=reuse, scope=str(i+1))
             else:
-                hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.nn.relu, reuse=reuse, scope=str(i+1))
+                hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=act, reuse=reuse, scope=str(i+1))
         return tf.matmul(hidden, weights['w'+str(len(self.dim_hidden)+1)]) + weights['b'+str(len(self.dim_hidden)+1)]
 
     def construct_conv_weights(self):
@@ -271,10 +330,10 @@ class MAML:
             weights['scale4'] = tf.Variable(tf.ones((self.dim_hidden,)))
         if FLAGS.datasource == 'miniimagenet':
             # assumes max pooling
-            if FLAGS.context_var:
-                weights['w5'] = tf.get_variable('w5', [self.dim_hidden*5*5+10, self.dim_output], initializer=fc_initializer)
-            else:
-                weights['w5'] = tf.get_variable('w5', [self.dim_hidden*5*5, self.dim_output], initializer=fc_initializer)
+            #if FLAGS.context_var:
+            #    weights['w5'] = tf.get_variable('w5', [self.dim_hidden*5*5+10, self.dim_output], initializer=fc_initializer)
+            #else:
+            weights['w5'] = tf.get_variable('w5', [self.dim_hidden*5*5, self.dim_output], initializer=fc_initializer)
             weights['b5'] = tf.Variable(tf.zeros([self.dim_output]), name='b5')
         else:
             weights['w5'] = tf.Variable(tf.random_normal([self.dim_hidden, self.dim_output]), name='w5')
@@ -293,7 +352,6 @@ class MAML:
         if FLAGS.context_var:
             num_examp = int(inp.get_shape()[0])
 
-        """
         if FLAGS.context_var:
             #channels = self.channels - 3  #self.context_size[-1] # TODO - specific to RGB.
             context = weights['context_var']
@@ -309,10 +367,10 @@ class MAML:
 
             context = tf.tile(context, [num_examp, 1])
 
-            context = tf.reshape(context, [num_examp, self.img_size,self.img_size,10])
-        else:
-        """
-        channels = self.channels
+            context = tf.reshape(context, [num_examp, self.img_size,self.img_size,1])
+            inp = tf.concat([inp, context], 3)
+        #else:
+        #    channels = self.channels
 
         #if (FLAGS.baseline and 'context_var' == FLAGS.baseline) or FLAGS.context_var:
         #    inp = tf.concat([inp, context], 3)
@@ -339,9 +397,9 @@ class MAML:
         else:
             hidden4 = tf.reduce_mean(hidden4, [1, 2])
 
-        if FLAGS.context_var:
-            context = tf.tile(weights['context_var'], [num_examp, 1])
-            hidden4 = tf.concat([hidden4, context], 1)
+        #if FLAGS.context_var:
+        #    context = tf.tile(weights['context_var'], [num_examp, 1])
+        #    hidden4 = tf.concat([hidden4, context], 1)
 
         return tf.matmul(hidden4, weights['w5']) + weights['b5']
 

@@ -32,18 +32,29 @@ class DataGenerator(object):
             self.generate = self.generate_sinusoid_batch
             self.amp_range = config.get('amp_range', [0.1, 5.0])
             #self.amp_range = config.get('amp_range', [5.0, 10.0])
-            self.phase_range = config.get('phase_range', [0, np.pi])
-            self.input_range = config.get('input_range', [-5.0, 5.0])
+            self.phase_range = config.get('phase_range', [0.0, np.pi])
+            #self.phase_range = config.get('phase_range', [np.pi, 2*np.pi])
+            self.input_range = config.get('input_range', [-5.0, 5.0]) # -5,5 normally
+            self.dim_input = 1
+            self.dim_output = 1
+        elif FLAGS.datasource == 'polynomial':
+            self.generate = self.generate_polynomial_batch
+            # roots
+            self.d_range = config.get('d_range', [-1.0, 1.0])
+            self.input_range = config.get('input_range', [-3.0, 3.0])
             self.dim_input = 1
             self.dim_output = 1
         elif 'siamese' in FLAGS.datasource: # includes siamese_omniglot
-            self.generate = self.generate_omniglot_batch
+            self.generate = self.generate_siamese_omniglot_batch
             self.num_classes = 1  # by default 1 (only relevant for classification problems)
             self.img_size = config.get('img_size', (28, 28))
             self.dim_input = np.prod(self.img_size)*2  # two images passed in.
             self.dim_output = 1
             # data that is pre-resized using PIL with lanczos filter
-            data_folder = config.get('data_folder', './data/omniglot_resized')
+            if FLAGS.train == False:
+                data_folder = config.get('data_folder', './data/omniglot_notresized')
+            else:
+                data_folder = config.get('data_folder', './data/omniglot_resized')
 
             character_folders = [os.path.join(data_folder, family, character) \
                 for family in os.listdir(data_folder) \
@@ -66,12 +77,16 @@ class DataGenerator(object):
             self.mnist = input_data.read_data_sets('/raid/cfinn/mnist_data', one_hot=False)
 
         elif 'omniglot' in FLAGS.datasource:
+            self.generate = self.generate_omniglot_batch
             self.num_classes = config.get('num_classes', FLAGS.num_classes)
             self.img_size = config.get('img_size', (28, 28))
             self.dim_input = np.prod(self.img_size)
             self.dim_output = self.num_classes
             # data that is pre-resized using PIL with lanczos filter
-            data_folder = config.get('data_folder', './data/omniglot_resized')
+            if FLAGS.train == False:
+                data_folder = config.get('data_folder', './data/omniglot_notresized')
+            else:
+                data_folder = config.get('data_folder', './data/omniglot_resized')
 
             character_folders = [os.path.join(data_folder, family, character) \
                 for family in os.listdir(data_folder) \
@@ -87,6 +102,8 @@ class DataGenerator(object):
             else:
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
+            #self.rotations = config.get('rotations', [45, 135, 225, 315])
+            #self.rotations = config.get('rotations', [10, 100, 190, 280])
         elif FLAGS.datasource == 'miniimagenet':
             self.num_classes = config.get('num_classes', FLAGS.num_classes)
             self.img_size = config.get('img_size', (84, 84))
@@ -207,8 +224,33 @@ class DataGenerator(object):
             outputs[func] = amp[func] * np.sin(init_inputs[func]-phase[func])
         return init_inputs, outputs, amp, phase
 
+    def generate_polynomial_batch(self, train=True, input_idx=None):
+        # start with degree 3 polynomials
+        d1 = np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d2 = np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d3 = np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d4 = np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d5 = 0*np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d6 = 0*np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d7 = 0*np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d8 = 0*np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d9 = 0*np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        d10 = 0*np.random.uniform(self.d_range[0], self.d_range[1], [self.batch_size])
+        outputs = np.zeros([self.batch_size, self.num_samples_per_task, self.dim_output])
+        init_inputs = np.zeros([self.batch_size, self.num_samples_per_task, self.dim_input])
+        for func in range(self.batch_size):
+            init_inputs[func] = np.random.uniform(self.input_range[0], self.input_range[1], [self.num_samples_per_task, 1])
+            if input_idx is not None:
+                init_inputs[:,input_idx:,0] = np.linspace(self.input_range[0], self.input_range[1], num=self.num_samples_per_task-input_idx, retstep=False)
+            x = init_inputs[func]
+            #outputs[func] = (x-d1[func])*(x-d2[func])*(x-d3[func])*(x-d4[func])
+            outputs[func] = d10[func]*(x**9) + d9[func]*(x**8) + d8[func]*x**7 + d7[func]*x**6 + d6[func]*x**5 \
+                    + d5[func]*x**4 + d4[func]*x**3 + d3[func]*x**2 + d2[func]*x + d1[func]
+        return init_inputs, outputs, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10
+
+
     def sample_img_transform(self):
-        scale_range = [1,2]
+        scale_range = [1,2]  # 1.0 to 0.5
         rotation_range = [-np.pi/2, np.pi/2]
         shear_range = [-np.pi/4.0, np.pi/4.0]
         sc = np.random.uniform(scale_range[0], scale_range[1], (2))
@@ -265,7 +307,7 @@ class DataGenerator(object):
     """
 
 
-    def generate_omniglot_batch(self, train=True):
+    def generate_siamese_omniglot_batch(self, train=True):
         ### Siamese omniglot comparison task.
         batch_size = self.batch_size
         inputs = np.zeros([batch_size, self.num_samples_per_task, self.dim_input], dtype=np.float32)
@@ -307,6 +349,52 @@ class DataGenerator(object):
 
             # one-hot representation
             #outputs[i,np.arange(self.num_classes*self.num_samples_per_task),labels] = 1.0
+
+        return inputs, outputs, None, None
+
+
+    def generate_omniglot_batch(self, train=True):
+        inputs = np.zeros([self.batch_size, self.num_classes * self.num_samples_per_task, self.dim_input], dtype=np.float32)
+        outputs = np.zeros([self.batch_size, self.num_classes * self.num_samples_per_task, self.dim_output], dtype=np.int32)
+
+        for i in range(self.batch_size):
+            if train:
+                if FLAGS.metatrain_iterations == 0 and 'imagenet' in FLAGS.datasource:  # imagenet pretraining
+                    sampled_character_folders = self.metatrain_character_folders  # preserve order so that labels are consistent
+                else:
+                    sampled_character_folders = random.sample(self.metatrain_character_folders, self.num_classes)
+                    random.shuffle(sampled_character_folders)
+            else:
+                sampled_character_folders = random.sample(self.metaval_character_folders, self.num_classes)
+                random.shuffle(sampled_character_folders)
+            labels_and_images = get_images(sampled_character_folders, range(self.num_classes), nb_samples=self.num_samples_per_task, shuffle=False)
+
+            # This code probably isn't necessary, but not bad to make sure that instances are shuffled within classes
+            random.shuffle(labels_and_images)
+            labels_and_images = sorted(labels_and_images, key=lambda x: x[0])
+
+            new_list = []
+            # Make sure each set of K examples have all different labels, where K = num_classes
+            for k in range(self.num_samples_per_task):
+                class_idxs = list(range(self.num_classes))
+                random.shuffle(class_idxs)
+                for j in class_idxs:
+                    new_list.append(labels_and_images[j*self.num_samples_per_task+k])
+            labels_and_images = new_list
+
+            sequence_length = len(labels_and_images)
+            labels, image_files = zip(*labels_and_images)
+            angles = np.random.choice(self.rotations, [self.num_classes])
+            angles = [angles[label] for label in labels]
+            self.max_shift=0
+            shifts = np.random.randint(-self.max_shift, self.max_shift + 1, size=(sequence_length, 2))
+            labels = np.asarray(labels, dtype=np.int32)
+            # one-hot representation
+            outputs[i,np.arange(self.num_classes*self.num_samples_per_task),labels] = 1.0
+
+            inputs[i] = np.asarray([load_transform(filename, angle=angle, s=shift, \
+                size=self.img_size).flatten() for (filename, angle, shift) in \
+                zip(image_files, angles, shifts)], dtype=np.float32)
 
         return inputs, outputs, None, None
 

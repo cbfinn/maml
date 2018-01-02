@@ -36,14 +36,20 @@ from tensorflow.python.platform import flags
 FLAGS = flags.FLAGS
 
 ## Dataset/method options
-flags.DEFINE_string('datasource', 'sinusoid', 'sinusoid or omniglot or miniimagenet or siamese_omniglot')
+flags.DEFINE_string('datasource', 'sinusoid', 'sinusoid or or polynomial or omniglot or miniimagenet or siamese_omniglot')
 flags.DEFINE_integer('num_classes', 5, 'number of classes used in classification (e.g. 5-way classification).')
 # oracle means task id is input (only suitable for sinusoid)
 flags.DEFINE_string('baseline', None, 'oracle, online, incl_task, or None')
 flags.DEFINE_bool('context_var', False, 'whether or not to include context variable to append to input')
+flags.DEFINE_bool('amp_only', False, 'only include amplitude in task description')
+flags.DEFINE_bool('zerok_shot', False, 'meta objective of both zero shot and k shot.')
+
+flags.DEFINE_bool('max_ent', False, 'whether or not to use max ent objective')
 
 flags.DEFINE_bool('update_bn', False, 'whether or not to update the batch normalization variables in the inner update')
 flags.DEFINE_bool('update_bn_only', False, 'whether or not to *only* update the batch normalization variables in the inner update')
+
+flags.DEFINE_bool('l1_loss', False, 'whether or not to use l1 loss with sinusoid ')
 
 flags.DEFINE_bool('nearest_neighbor', False, 'test time only - eval classification using nearest neighbor in pixel space')
 
@@ -57,6 +63,7 @@ flags.DEFINE_float('meta_lr', 0.001, 'the base learning rate of the generator')
 flags.DEFINE_integer('update_batch_size', 5, 'number of examples used for inner gradient update (K for K-shot learning).')
 flags.DEFINE_float('update_lr', 1e-3, 'step size alpha for inner gradient update.') # 0.1 for omniglot
 flags.DEFINE_integer('num_updates', 1, 'number of inner gradient updates during training.')
+flags.DEFINE_bool('inner_sgd', False, 'if True, run SGD in inner loop rather than batch GD.')
 
 ## Model options
 flags.DEFINE_string('norm', 'batch_norm', 'batch_norm, layer_norm, or None')
@@ -73,15 +80,16 @@ flags.DEFINE_bool('log', True, 'if false, do not log summaries, for debugging co
 flags.DEFINE_string('logdir', '/tmp/data', 'directory for summaries and checkpoints.')
 flags.DEFINE_bool('resume', True, 'resume training if there is a model available')
 flags.DEFINE_bool('train', True, 'True to train, False to test.')
+flags.DEFINE_bool('test_ensemble', False, 'True to test normally. False to test ensemble of models.')
 flags.DEFINE_integer('test_iter', -1, 'iteration to load model (-1 for latest model)')
 flags.DEFINE_bool('test_set', False, 'Set to true to test on the the test set, False for the validation set.')
 flags.DEFINE_integer('train_update_batch_size', -1, 'number of examples used for gradient update during training (use if you want to test with a different number).')
 flags.DEFINE_float('train_update_lr', -1, 'value of inner gradient step step during training. (use if you want to test with a different value)') # 0.1 for omniglot
 
-def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
+def train(model, saver, sess, exp_string, data_generator, resume_itr=0, test_num_updates=None):
     SUMMARY_INTERVAL = 100
     SAVE_INTERVAL = 1000
-    if FLAGS.datasource == 'sinusoid':
+    if FLAGS.datasource == 'sinusoid' or FLAGS.datasource == 'polynomial':
         PRINT_INTERVAL = 1000
         TEST_PRINT_INTERVAL = PRINT_INTERVAL*5
     else:
@@ -96,26 +104,52 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
     num_classes = data_generator.num_classes # for classification, 1 otherwise
     multitask_weights, reg_weights = [], []
 
+    train_examples = num_classes * FLAGS.update_batch_size
+    if FLAGS.inner_sgd:
+        train_examples *= max(test_num_updates, FLAGS.num_updates)
+
+
     for itr in range(resume_itr, FLAGS.pretrain_iterations + FLAGS.metatrain_iterations):
         feed_dict = {}
         if 'generate' in dir(data_generator):
-            batch_x, batch_y, amp, phase = data_generator.generate()
+            if 'polynomial' in FLAGS.datasource:
+              batch_x, batch_y, d1, d2 ,d3, d4, d5, d6, d7, d8, d9, d10 = data_generator.generate()
+            else:
+              batch_x, batch_y, amp, phase = data_generator.generate()
 
             if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline=='incl_task':
                 if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
-                  batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
+                  if FLAGS.amp_only:  # only include amplitude
+                      batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 1])], 2)
+                      for i in range(FLAGS.meta_batch_size):
+                          batch_x[i, :, 1] = amp[i]
+                  else:
+                      batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
+                      for i in range(FLAGS.meta_batch_size):
+                          batch_x[i, :, 1] = amp[i]
+                          batch_x[i, :, 2] = phase[i]
+                elif 'polynomial' in FLAGS.datasource: # siamese already has task id encoded in the input
+                  batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 10])], 2)
                   for i in range(FLAGS.meta_batch_size):
-                      batch_x[i, :, 1] = amp[i]
-                      batch_x[i, :, 2] = phase[i]
+                      batch_x[i, :, 1] = d1[i]
+                      batch_x[i, :, 2] = d2[i]
+                      batch_x[i, :, 3] = d3[i]
+                      batch_x[i, :, 4] = d4[i]
+                      batch_x[i, :, 5] = d5[i]
+                      batch_x[i, :, 6] = d6[i]
+                      batch_x[i, :, 7] = d7[i]
+                      batch_x[i, :, 8] = d8[i]
+                      batch_x[i, :, 9] = d9[i]
+                      batch_x[i, :, 10] = d10[i]
             if FLAGS.baseline == 'online' and itr % 2 == 1:
                 batch_x, batch_y, amp, phase = last_batch
             elif FLAGS.baseline == 'online':
                 last_batch = batch_x, batch_y, amp, phase
 
-            inputa = batch_x[:, :num_classes*FLAGS.update_batch_size, :]
-            labela = batch_y[:, :num_classes*FLAGS.update_batch_size, :]
-            inputb = batch_x[:, num_classes*FLAGS.update_batch_size:, :] # b used for testing
-            labelb = batch_y[:, num_classes*FLAGS.update_batch_size:, :]
+            inputa = batch_x[:, :train_examples, :]
+            labela = batch_y[:, :train_examples, :]
+            inputb = batch_x[:, train_examples:, :] # b used for testing
+            labelb = batch_y[:, train_examples:, :]
             feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb}
 
         if itr < FLAGS.pretrain_iterations or (FLAGS.baseline == 'online' and itr % 2 == 1) or (FLAGS.alternate_grad_meta and itr % 2 == 1):
@@ -127,6 +161,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
             input_tensors.extend([model.summ_op, model.total_loss1, model.total_losses2[FLAGS.num_updates-1]])
             if model.classification:
                 input_tensors.extend([model.total_accuracy1, model.total_accuracies2[FLAGS.num_updates-1]])
+        #import pdb; pdb.set_trace() # input_tensors.append(model.neg_entropy_estimate)
 
         result = sess.run(input_tensors, feed_dict)
 
@@ -149,7 +184,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
             saver.save(sess, FLAGS.logdir + '/' + exp_string + '/model' + str(itr))
 
         # sinusoid is infinite data, so no need to test on meta-validation set.
-        if (itr!=0) and itr % TEST_PRINT_INTERVAL == 0 and FLAGS.datasource !='sinusoid':
+        if (itr!=0) and itr % TEST_PRINT_INTERVAL == 0 and FLAGS.datasource !='sinusoid' and FLAGS.datasource != 'polynomial':
             if 'generate' not in dir(data_generator):
                 feed_dict = {}
                 if model.classification:
@@ -159,10 +194,10 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                     input_tensors = [model.metaval_total_loss1, model.metaval_total_losses2[FLAGS.num_updates-1], model.summ_op]
             else:
                 batch_x, batch_y, amp, phase = data_generator.generate(train=False)
-                inputa = batch_x[:, :num_classes*FLAGS.update_batch_size, :]
-                inputb = batch_x[:, num_classes*FLAGS.update_batch_size:, :]
-                labela = batch_y[:, :num_classes*FLAGS.update_batch_size, :]
-                labelb = batch_y[:, num_classes*FLAGS.update_batch_size:, :]
+                inputa = batch_x[:, :train_examples, :]
+                inputb = batch_x[:, train_examples:, :]
+                labela = batch_y[:, :train_examples, :]
+                labelb = batch_y[:, train_examples:, :]
                 feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb, model.meta_lr: 0.0}
                 if model.classification:
                     input_tensors = [model.total_accuracy1, model.total_accuracies2[FLAGS.num_updates-1]]
@@ -175,7 +210,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
     saver.save(sess, FLAGS.logdir + '/' + exp_string +  '/model' + str(itr))
 
 # calculated for omniglot
-NUM_TEST_POINTS = 600
+NUM_TEST_POINTS = 1200 #1200
 
 def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
     num_classes = data_generator.num_classes # for classification, 1 otherwise
@@ -185,23 +220,105 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
 
     metaval_accuracies = []
 
-    for _ in range(NUM_TEST_POINTS):
+    train_examples = num_classes * FLAGS.update_batch_size
+    if FLAGS.inner_sgd:
+        train_examples *= max(test_num_updates, FLAGS.num_updates)
+
+    if FLAGS.test_ensemble:
+        # plot ensemble variance vs. task MSE
+        # in distribution points in one color, out of distribution in another
+        model_file1 = 'logs/sine1/seed1/cls_5.mbs_25.ubs_20.numstep5.updatelr0.001.metalr0.001hidden100context_fcnonorm/model69999'
+        model_file2 = 'logs/sine1/seed2/cls_5.mbs_25.ubs_20.numstep5.updatelr0.001.metalr0.001hidden100context_fcnonorm/model69999'
+        model_file3 = 'logs/sine1/seed3/cls_5.mbs_25.ubs_20.numstep5.updatelr0.001.metalr0.001hidden100context_fcnonorm/model69999'
+        model_file4 = 'logs/sine1/seed4/cls_5.mbs_25.ubs_20.numstep5.updatelr0.001.metalr0.001hidden100context_fcnonorm/model69999'
+        model_file5 = 'logs/sine1/seed5/cls_5.mbs_25.ubs_20.numstep5.updatelr0.001.metalr0.001hidden100context_fcnonorm/model69999'
+        assert 'generate' in dir(data_generator) and FLAGS.datasource == 'sinusoid'
+        variances, errors, amps, phases = [], [], [], []
+        data_generator.phase_range = [0, 2*np.pi]
+        for _ in range(int(NUM_TEST_POINTS/2)):
+
+            batch_x, batch_y, amp, phase = data_generator.generate(train=False)
+
+            inputa = batch_x[:, :train_examples, :]
+            inputb = batch_x[:,train_examples:, :]
+            labela = batch_y[:, :train_examples, :]
+            labelb = batch_y[:, train_examples:, :]
+            feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb, model.meta_lr: 0.0}
+
+           # start with 5 grad steps only. Next try more than 5.
+            saver.restore(sess, model_file1)
+            result1 = sess.run([model.outputbs, model.total_losses2], feed_dict)
+            saver.restore(sess, model_file2)
+            result2 = sess.run([model.outputbs, model.total_losses2], feed_dict)
+            saver.restore(sess, model_file3)
+            result3 = sess.run([model.outputbs, model.total_losses2], feed_dict)
+            saver.restore(sess, model_file4)
+            result4 = sess.run([model.outputbs, model.total_losses2], feed_dict)
+            saver.restore(sess, model_file5)
+            result5 = sess.run([model.outputbs, model.total_losses2], feed_dict)
+            results = [result1, result2, result3, result4, result5]
+
+            # might want to measure median task variance instead of mean...
+            variance = np.mean(np.var(np.squeeze(np.array([result[0][-1] for result in results])), axis = 0))
+            error = result1[1][-1]
+            variances.append(variance)
+            errors.append(error)
+            amps.append(amp[0])
+            phases.append(phase[0])
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        plt.figure()
+        phases, variances, errors = np.asarray(phases), np.array(variances), np.array(errors)
+        indistr_inds = np.nonzero(phases < np.pi)
+        outdistr_inds = np.nonzero(phases >= np.pi)
+        plt.scatter(variances[outdistr_inds], errors[outdistr_inds], c='r', marker = 'x')
+        plt.scatter(variances[indistr_inds], errors[indistr_inds], c='b', marker ='+')
+
+        plt.xlabel('mean task variance')
+        plt.ylabel('20-shot mean task error')
+        plt.title('Blue: in distribution, Red: out of distribution')
+        import pdb; pdb.set_trace()
+        plt.savefig('/home/cfinn/20gradstep_ensemble.png')
+
+        return
+
+    for test_point_i in range(NUM_TEST_POINTS):
         if 'generate' not in dir(data_generator):
             feed_dict = {}
             feed_dict = {model.meta_lr : 0.0}
         else:
-            batch_x, batch_y, amp, phase = data_generator.generate(train=False)
+            if FLAGS.datasource == 'polynomial':
+              batch_x, batch_y, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10 = data_generator.generate(train=False)
+            else:
+              batch_x, batch_y, amp, phase = data_generator.generate(train=False)
 
             if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline == 'incl_task':
                 if FLAGS.datasource == 'sinusoid':
-                    batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
-                    batch_x[0, :, 1] = amp[0]
-                    batch_x[0, :, 2] = phase[0]
+                    if FLAGS.amp_only:
+                      batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 1])], 2)
+                      batch_x[0, :, 1] = amp[0]
+                    else:
+                      batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
+                      batch_x[0, :, 1] = amp[0]
+                      batch_x[0, :, 2] = phase[0]
+                elif 'polynomial' in FLAGS.datasource: # siamese already has task id encoded in the input
+                    batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 10])], 2)
+                    batch_x[0, :, 1] = d1[0]
+                    batch_x[0, :, 2] = d2[0]
+                    batch_x[0, :, 3] = d3[0]
+                    batch_x[0, :, 4] = d4[0]
+                    batch_x[0, :, 5] = d5[0]
+                    batch_x[0, :, 6] = d6[0]
+                    batch_x[0, :, 7] = d7[0]
+                    batch_x[0, :, 8] = d8[0]
+                    batch_x[0, :, 9] = d9[0]
+                    batch_x[0, :, 10] = d10[0]
 
-            inputa = batch_x[:, :num_classes*FLAGS.update_batch_size, :]
-            inputb = batch_x[:,num_classes*FLAGS.update_batch_size:, :]
-            labela = batch_y[:, :num_classes*FLAGS.update_batch_size, :]
-            labelb = batch_y[:,num_classes*FLAGS.update_batch_size:, :]
+            inputa = batch_x[:, :train_examples, :]
+            inputb = batch_x[:, train_examples:, :]
+            labela = batch_y[:, :train_examples, :]
+            labelb = batch_y[:, train_examples:, :]
 
             # nearest neighbor code:
             num_right = 0
@@ -223,12 +340,17 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
         if not FLAGS.nearest_neighbor:
             if model.classification:
                 if 'generate' not in dir(data_generator):
-                    result = sess.run([model.metaval_total_accuracy1] + model.metaval_total_accuracies2, feed_dict)
+                    #result = sess.run([model.metaval_total_accuracy1] + model.metaval_total_accuracies2, feed_dict)
+                    result = sess.run(model.metaval_total_accuraciesa + model.metaval_total_accuracies2, feed_dict)
                 else:
-                    result = sess.run([model.total_accuracy1] + model.total_accuracies2, feed_dict)
+                    #result = sess.run([model.total_accuracy1] + model.total_accuracies2, feed_dict)
+                    result = sess.run([model.total_accuracy1] + model.total_accuraciesa + model.total_accuracies2, feed_dict)
             else:  # this is for sinusoid
+                #import pdb; pdb.set_trace()  # ask for model.outputas
+                # saver.restore(sess, model_file)
                 result = sess.run([model.total_loss1] +  model.total_losses2, feed_dict)
             metaval_accuracies.append(result)
+    #import pdb; pdb.set_trace()
 
     metaval_accuracies = np.array(metaval_accuracies)
     means = np.mean(metaval_accuracies, 0)
@@ -256,6 +378,7 @@ def main():
         else:
             test_num_updates = 100  # normally 10
     else:
+        assert not FLAGS.inner_sgd # not currently supported.
         if FLAGS.datasource == 'miniimagenet':
             if FLAGS.train == True:
                 test_num_updates = 1  # eval on at least one update during training
@@ -265,35 +388,44 @@ def main():
             if FLAGS.train == True:
                 test_num_updates = 10
             else:
-                test_num_updates = 1 # 50
+                test_num_updates = 100 # 50
+    if not FLAGS.train:
+        test_num_updates = 20
 
     if FLAGS.train == False:
         orig_meta_batch_size = FLAGS.meta_batch_size
         # always use meta batch size of 1 when testing.
         FLAGS.meta_batch_size = 1
 
-    if FLAGS.datasource == 'sinusoid':
-        data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)
+    if FLAGS.datasource == 'sinusoid' or FLAGS.datasource == 'polynomial' or 'omniglot' in FLAGS.datasource:
+        if FLAGS.inner_sgd:
+            num_updates = max(FLAGS.num_updates, test_num_updates)
+            data_generator = DataGenerator(FLAGS.update_batch_size*(num_updates + 1), FLAGS.meta_batch_size)
+        else:
+            data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)
     else:
-        if FLAGS.metatrain_iterations == 0 and FLAGS.datasource == 'miniimagenet':
+        assert FLAGS.datasource == 'miniimagenet'
+        if FLAGS.metatrain_iterations == 0:
             assert FLAGS.meta_batch_size == 1
             assert FLAGS.update_batch_size == 1
             data_generator = DataGenerator(1, FLAGS.meta_batch_size)  # only use one datapoint,
         else:
-            if FLAGS.datasource == 'miniimagenet': # TODO - use 15 val examples for imagenet?
-                if FLAGS.train:
-                    data_generator = DataGenerator(FLAGS.update_batch_size+15, FLAGS.meta_batch_size)
-                else:
-                    data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)
+            if FLAGS.train:
+                data_generator = DataGenerator(FLAGS.update_batch_size+15, FLAGS.meta_batch_size)
             else:
                 data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)
 
-
     dim_output = data_generator.dim_output
+    #delete = data_generator.generate()
     if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline == 'incl_task':
-        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource
+        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource or FLAGS.datasource == 'polynomial'
         if FLAGS.datasource == 'sinusoid':
-            dim_input = 3
+            if FLAGS.amp_only:
+                dim_input = 2
+            else:
+                dim_input = 3
+        elif FLAGS.datasource == 'polynomial':
+            dim_input = 11
         else:
             dim_input = data_generator.dim_input
         if FLAGS.baseline == 'oracle':
@@ -302,7 +434,9 @@ def main():
     else:
         dim_input = data_generator.dim_input
 
-    if FLAGS.datasource == 'miniimagenet' or FLAGS.datasource == 'omniglot': # not including siamese omniglot
+    #if FLAGS.datasource == 'miniimagenet' or FLAGS.datasource == 'omniglot': # not including siamese omniglot
+    if 'generate' not in dir(data_generator):
+        assert not FLAGS.inner_sgd
         tf_data_load = True
         num_classes = data_generator.num_classes
 
@@ -359,8 +493,12 @@ def main():
     exp_string += ''
 
 
+    if FLAGS.max_ent:
+        exp_string += 'maxent'
     if FLAGS.max_pool:
         exp_string += 'maxpool'
+    if FLAGS.l1_loss:
+        exp_string += 'l1loss'
     if FLAGS.stop_grad:
         exp_string += 'stopgrad'
     if FLAGS.alternate_grad_meta:
@@ -391,17 +529,19 @@ def main():
 
     if FLAGS.resume or not FLAGS.train:
         model_file = tf.train.latest_checkpoint(FLAGS.logdir + '/' + exp_string)
+        print(model_file)
+        #model_file = model_file[:-3] + '000'
+        #import pdb; pdb.set_trace()
         if FLAGS.test_iter > 0:
             model_file = model_file[:model_file.index('model')] + 'model' + str(FLAGS.test_iter)
         if model_file:
-            import pdb; pdb.set_trace()
             ind1 = model_file.index('model')
             resume_itr = int(model_file[ind1+5:])
             print("Restoring model weights from " + model_file)
             saver.restore(sess, model_file)
 
     if FLAGS.train:
-        train(model, saver, sess, exp_string, data_generator, resume_itr)
+        train(model, saver, sess, exp_string, data_generator, resume_itr, test_num_updates)
     else:
         test(model, saver, sess, exp_string, data_generator, test_num_updates)
 

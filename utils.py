@@ -4,10 +4,15 @@ import os
 import random
 from scipy.misc import imread, imresize
 from scipy.ndimage import rotate, shift
+from skimage import transform
 import tensorflow as tf
 
 from tensorflow.contrib.layers.python import layers as tf_layers
 from tensorflow.python.platform import flags
+
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib.pyplot import imsave
 
 FLAGS = flags.FLAGS
 
@@ -57,6 +62,12 @@ def mse(pred, label):
     label = tf.reshape(label, [-1])
     return tf.reduce_mean(tf.square(pred-label))
 
+def l1_loss(pred, label):
+    pred = tf.reshape(pred, [-1])
+    label = tf.reshape(label, [-1])
+    return tf.reduce_mean(tf.abs(pred-label))
+
+
 def xent(pred, label):
     # Note - with tf version <=0.12, this loss has incorrect 2nd derivatives
     return tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size
@@ -65,18 +76,33 @@ def sigmoid_xent(pred, label):
     return tf.nn.sigmoid_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size
 
 
-def load_transform(image_path, angle=0., s=(0, 0), size=(20, 20)):
+def load_transform(image_path, angle=0., s=(0, 0), size=(20, 20), scale=None):
   # Load the image
-  original = imread(image_path, flatten=True)
+  original = imread(image_path) #, flatten=True)
+  original = 255 - original
+
+  scale = 1.0, 1.0 #1.1111111, 1.1111111 #0.9, 0.9 #1.25, 1.25 #0.8, 0.8 # corresponds to 1.25x larger
+  shear = 0 #-np.pi/6
+  if scale:
+    orig_size = original.shape[0]
+    T = np.array([[1, 0,-orig_size/2.0],[0, 1,-orig_size/2.0],[0, 0, 1]])
+    invT = np.linalg.inv(T)
+    tform = transform.AffineTransform(scale=scale, shear=shear)
+    new_params = invT.dot(tform.params).dot(T)
+    tform = transform.AffineTransform(new_params)
+    original = transform.warp(original, tform)
+
   # Rotate the image
-  rotated = rotate(original, angle=angle, cval=1.)
+  rotated = rotate(original, angle=angle, cval=0.)
   # Shift the image
-  shifted = shift(rotated, shift=s)
+  #shifted = shift(rotated, shift=s)
   # Resize the image
-  resized = np.asarray(imresize(rotated, size=size, interp='lanczos'), dtype=np.float32) / 255.
+  resized = imresize(rotated, size=size, interp='lanczos')
+  #resized = imresize(rotated, size=size)
+  resized = np.asarray(resized, dtype=np.float32) / 255
   #return resized
   # Invert the image
-  inverted = 1. - resized
-  return inverted
+  #inverted = 1. - resized
+  return resized
 
 
