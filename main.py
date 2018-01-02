@@ -50,6 +50,7 @@ flags.DEFINE_bool('update_bn', False, 'whether or not to update the batch normal
 flags.DEFINE_bool('update_bn_only', False, 'whether or not to *only* update the batch normalization variables in the inner update')
 
 flags.DEFINE_bool('l1_loss', False, 'whether or not to use l1 loss with sinusoid ')
+flags.DEFINE_bool('learned_loss', False, 'whether or not to use an inner learned loss')
 
 flags.DEFINE_bool('nearest_neighbor', False, 'test time only - eval classification using nearest neighbor in pixel space')
 
@@ -499,6 +500,8 @@ def main():
         exp_string += 'maxpool'
     if FLAGS.l1_loss:
         exp_string += 'l1loss'
+    if FLAGS.learned_loss:
+        exp_string += 'learned_loss'
     if FLAGS.stop_grad:
         exp_string += 'stopgrad'
     if FLAGS.alternate_grad_meta:

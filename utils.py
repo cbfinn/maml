@@ -67,7 +67,6 @@ def l1_loss(pred, label):
     label = tf.reshape(label, [-1])
     return tf.reduce_mean(tf.abs(pred-label))
 
-
 def xent(pred, label):
     # Note - with tf version <=0.12, this loss has incorrect 2nd derivatives
     return tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size

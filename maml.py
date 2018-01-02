@@ -51,7 +51,9 @@ class MAML:
             self.img_size = int(np.sqrt(self.dim_input/self.channels))
         else:
             raise ValueError('Unrecognized data source.')
-        if self.inner_loss_func is None:
+        if FLAGS.learned_loss:
+            self.inner_loss_func = self.learned_loss
+        elif self.inner_loss_func is None:
             self.inner_loss_func = self.loss_func
         if FLAGS.context_var:
             if FLAGS.conv and self.classification:
@@ -258,6 +260,17 @@ class MAML:
             tf.summary.scalar(prefix+'Post-update loss, step ' + str(j+1), total_losses2[j])
             if self.classification:
                 tf.summary.scalar(prefix+'Post-update accuracy, step ' + str(j+1), total_accuracies2[j])
+
+    def learned_loss(self, pred, label=None):
+        # Label is unused, to match the signature of other losses.
+        fc_init =  tf.contrib.layers.xavier_initializer(dtype=dtype)
+        if 'loss_weights' not in dir(self):
+            self.loss_weights = {}
+            self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, 1]))
+            self.loss_weights['b1'] = tf.Variable(tf.zeros([1]))
+        # don't square this?
+        loss = tf.square(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])
+        return loss
 
     ### Network construction functions (fc networks and conv networks)
     def construct_fc_weights(self):
