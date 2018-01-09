@@ -37,10 +37,17 @@ FLAGS = flags.FLAGS
 
 ## Dataset/method options
 flags.DEFINE_string('datasource', 'sinusoid', 'sinusoid or omniglot or miniimagenet or siamese_omniglot')
+flags.DEFINE_string('datadistr', 'stationary', 'stationary or continual1')
 flags.DEFINE_integer('num_classes', 5, 'number of classes used in classification (e.g. 5-way classification).')
 # oracle means task id is input (only suitable for sinusoid)
-flags.DEFINE_string('baseline', None, 'oracle, online, incl_task, or None')
+# contextual means to concatenate the meta-training set as input (channel-wise concat if images)
+flags.DEFINE_string('baseline', None, 'oracle, online, incl_task, contextual, or None')
 flags.DEFINE_bool('context_var', False, 'whether or not to include context variable to append to input')
+
+flags.DEFINE_bool('pred_task', False, 'whether or not to predict the task context rather than the label for inner update')
+flags.DEFINE_bool('learn_loss', False, 'whether or not to use a learned loss (only supported with pred_task and sinusoid)')
+flags.DEFINE_bool('label_in_loss', False, 'whether or not to include the label as input to the  learned loss (only supported with learn_loss and sinusoid)')
+flags.DEFINE_bool('semisup_loss', False, 'whether or not to use a semi-supervised learned loss (only supported with pred_task and sinusoid)')
 
 flags.DEFINE_bool('update_bn', False, 'whether or not to update the batch normalization variables in the inner update')
 flags.DEFINE_bool('update_bn_only', False, 'whether or not to *only* update the batch normalization variables in the inner update')
@@ -48,6 +55,11 @@ flags.DEFINE_bool('update_bn_only', False, 'whether or not to *only* update the 
 flags.DEFINE_bool('nearest_neighbor', False, 'test time only - eval classification using nearest neighbor in pixel space')
 
 flags.DEFINE_bool('alternate_grad_meta', False, 'whether or not to alternate between plain GD steps and meta-GD steps')
+
+flags.DEFINE_bool('learned_loss', False, 'whether or not to use a learned inner loss function')
+flags.DEFINE_bool('test_on_train', False, 'inner and outer dataset the same')
+flags.DEFINE_bool('inner_sgd', False, 'whether or not to SGD in the inner loop')
+flags.DEFINE_float('pixel_dropout', 0.0, 'pixel dropout percentage')
 
 ## Training options
 flags.DEFINE_integer('pretrain_iterations', 0, 'number of pre-training iterations.')
@@ -68,6 +80,8 @@ flags.DEFINE_bool('conv', True, 'whether or not to use a convolutional network, 
 flags.DEFINE_bool('max_pool', False, 'Whether or not to use max pooling rather than strided convolutions')
 flags.DEFINE_bool('stop_grad', False, 'if True, do not use second derivatives in meta-optimization (for speed)')
 
+flags.DEFINE_bool('incl_switch', False, 'if True, switch top and bottom of MNIST digits with 50% probability')
+
 ## Logging, saving, and testing options
 flags.DEFINE_bool('log', True, 'if false, do not log summaries, for debugging code.')
 flags.DEFINE_string('logdir', '/tmp/data', 'directory for summaries and checkpoints.')
@@ -79,7 +93,7 @@ flags.DEFINE_integer('train_update_batch_size', -1, 'number of examples used for
 flags.DEFINE_float('train_update_lr', -1, 'value of inner gradient step step during training. (use if you want to test with a different value)') # 0.1 for omniglot
 
 def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
-    SUMMARY_INTERVAL = 100
+    SUMMARY_INTERVAL = 20
     SAVE_INTERVAL = 1000
     if FLAGS.datasource == 'sinusoid':
         PRINT_INTERVAL = 1000
@@ -90,32 +104,44 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
 
     if FLAGS.log:
         train_writer = tf.summary.FileWriter(FLAGS.logdir + '/' + exp_string, sess.graph)
+        val_writer = tf.summary.FileWriter(FLAGS.logdir + '/val' + exp_string, sess.graph)
     print('Done initializing, starting training.')
     prelosses, postlosses = [], []
 
     num_classes = data_generator.num_classes # for classification, 1 otherwise
     multitask_weights, reg_weights = [], []
+    inputa, inputb, labela, labelb = None, None, None, None
+
+    train_examples = FLAGS.num_classes * FLAGS.update_batch_size
+    if FLAGS.inner_sgd:
+        train_examples *= FLAGS.num_updates
 
     for itr in range(resume_itr, FLAGS.pretrain_iterations + FLAGS.metatrain_iterations):
         feed_dict = {}
         if 'generate' in dir(data_generator):
-            batch_x, batch_y, amp, phase = data_generator.generate()
+            batch_x, batch_y, amp, phase = data_generator.generate(itr=itr)
 
             if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline=='incl_task':
                 if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
                   batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
                   for i in range(FLAGS.meta_batch_size):
                       batch_x[i, :, 1] = amp[i]
-                      batch_x[i, :, 2] = phase[i]
+                      batch_x[i, :, 2] = phase[i] 
+            if FLAGS.pred_task:
+                if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
+                  batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
+                  for i in range(FLAGS.meta_batch_size):
+                      batch_y[i, :, 1] = amp[i]
+                      batch_y[i, :, 2] = phase[i] 
             if FLAGS.baseline == 'online' and itr % 2 == 1:
                 batch_x, batch_y, amp, phase = last_batch
             elif FLAGS.baseline == 'online':
                 last_batch = batch_x, batch_y, amp, phase
 
-            inputa = batch_x[:, :num_classes*FLAGS.update_batch_size, :]
-            labela = batch_y[:, :num_classes*FLAGS.update_batch_size, :]
-            inputb = batch_x[:, num_classes*FLAGS.update_batch_size:, :] # b used for testing
-            labelb = batch_y[:, num_classes*FLAGS.update_batch_size:, :]
+            inputb = batch_x[:, train_examples:, :] # b used for testing
+            labelb = batch_y[:, train_examples:, :]
+            inputa = batch_x[:, :train_examples, :]
+            labela = batch_y[:, :train_examples, :]
             feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb}
 
         if itr < FLAGS.pretrain_iterations or (FLAGS.baseline == 'online' and itr % 2 == 1) or (FLAGS.alternate_grad_meta and itr % 2 == 1):
@@ -149,8 +175,10 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
             saver.save(sess, FLAGS.logdir + '/' + exp_string + '/model' + str(itr))
 
         # sinusoid is infinite data, so no need to test on meta-validation set.
-        if (itr!=0) and itr % TEST_PRINT_INTERVAL == 0 and FLAGS.datasource !='sinusoid':
+        #if (itr!=0) and itr % TEST_PRINT_INTERVAL == 0:
+        if (itr!=0) and itr % SUMMARY_INTERVAL == 0:
             if 'generate' not in dir(data_generator):
+                assert not FLAGS.inner_sgd # not yet supported
                 feed_dict = {}
                 if model.classification:
                     input_tensors = [model.metaval_total_accuracy1, model.metaval_total_accuracies2[FLAGS.num_updates-1], model.summ_op]
@@ -158,19 +186,35 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                 else:
                     input_tensors = [model.metaval_total_loss1, model.metaval_total_losses2[FLAGS.num_updates-1], model.summ_op]
             else:
-                batch_x, batch_y, amp, phase = data_generator.generate(train=False)
-                inputa = batch_x[:, :num_classes*FLAGS.update_batch_size, :]
-                inputb = batch_x[:, num_classes*FLAGS.update_batch_size:, :]
-                labela = batch_y[:, :num_classes*FLAGS.update_batch_size, :]
-                labelb = batch_y[:, num_classes*FLAGS.update_batch_size:, :]
-                feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb, model.meta_lr: 0.0}
-                if model.classification:
-                    input_tensors = [model.total_accuracy1, model.total_accuracies2[FLAGS.num_updates-1]]
-                else:
-                    input_tensors = [model.total_loss1, model.total_losses2[FLAGS.num_updates-1]]
+                batch_x, batch_y, amp, phase = data_generator.generate(train=False, itr=itr)
 
+                if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline=='incl_task':
+                    if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
+                      batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
+                      for i in range(FLAGS.meta_batch_size):
+                          batch_x[i, :, 1] = amp[i]
+                          batch_x[i, :, 2] = phase[i] 
+                if FLAGS.pred_task:
+                    if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
+                      batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
+                      for i in range(FLAGS.meta_batch_size):
+                          batch_y[i, :, 1] = amp[i]
+                          batch_y[i, :, 2] = phase[i] 
+
+                val_inputa = batch_x[:, :train_examples, :]
+                val_inputb = batch_x[:, train_examples:, :]
+                val_labela = batch_y[:, :train_examples, :]
+                val_labelb = batch_y[:, train_examples:, :]
+                feed_dict = {model.inputa: val_inputa, model.inputb: val_inputb,  model.labela: val_labela, model.labelb: val_labelb, model.meta_lr: 0.0}
+                input_tensors = [model.total_loss1, model.total_losses2[FLAGS.num_updates-1]]
+                if model.classification:
+                    input_tensors.extend([model.total_accuracy1, model.total_accuracies2[FLAGS.num_updates-1]])
+
+            input_tensors.append(model.summ_op)
             result = sess.run(input_tensors, feed_dict)
-            print('Validation results: ' + str(result[0]) + ', ' + str(result[1]))
+            val_writer.add_summary(result[-1], itr)
+            if itr % TEST_PRINT_INTERVAL == 0:
+                print('Validation results: ' + str(result[0]) + ', ' + str(result[1]))
 
     saver.save(sess, FLAGS.logdir + '/' + exp_string +  '/model' + str(itr))
 
@@ -184,6 +228,9 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
     random.seed(1)
 
     metaval_accuracies = []
+    train_examples = num_classes * FLAGS.update_batch_size   
+    if FLAGS.inner_sgd:
+        train_examples *= max(test_num_updates, FLAGS.num_updates)
 
     for _ in range(NUM_TEST_POINTS):
         if 'generate' not in dir(data_generator):
@@ -197,11 +244,17 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
                     batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
                     batch_x[0, :, 1] = amp[0]
                     batch_x[0, :, 2] = phase[0]
-
-            inputa = batch_x[:, :num_classes*FLAGS.update_batch_size, :]
-            inputb = batch_x[:,num_classes*FLAGS.update_batch_size:, :]
-            labela = batch_y[:, :num_classes*FLAGS.update_batch_size, :]
-            labelb = batch_y[:,num_classes*FLAGS.update_batch_size:, :]
+            if FLAGS.pred_task:
+                if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
+                  batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
+                  for i in range(FLAGS.meta_batch_size):
+                      batch_y[0, :, 1] = amp[0]
+                      batch_y[0, :, 2] = phase[0] 
+ 
+            inputa = batch_x[:, :train_examples, :]
+            inputb = batch_x[:,train_examples:, :]
+            labela = batch_y[:, :train_examples, :]
+            labelb = batch_y[:,train_examples:, :]
 
             # nearest neighbor code:
             num_right = 0
@@ -254,7 +307,7 @@ def main():
         if FLAGS.train:
             test_num_updates = 5
         else:
-            test_num_updates = 100  # normally 10
+            test_num_updates = 20  # normally 10
     else:
         if FLAGS.datasource == 'miniimagenet':
             if FLAGS.train == True:
@@ -273,8 +326,18 @@ def main():
         FLAGS.meta_batch_size = 1
 
     if FLAGS.datasource == 'sinusoid':
+        assert not FLAGS.inner_sgd # not yet supported
         data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)
+    elif FLAGS.datasource == 'rainbow_mnist':
+        #assert FLAGS.update_batch_size < 5  # only 5 images per task
+        # was 5, now udpate_batch_size*2
+        if FLAGS.inner_sgd:
+            test_num_updates = FLAGS.num_updates
+            data_generator = DataGenerator(FLAGS.update_batch_size*(FLAGS.num_updates+1), FLAGS.meta_batch_size)
+        else:
+            data_generator = DataGenerator(min(FLAGS.update_batch_size*2, 20), FLAGS.meta_batch_size)
     else:
+        assert not FLAGS.inner_sgd # not yet supported
         if FLAGS.metatrain_iterations == 0 and FLAGS.datasource == 'miniimagenet':
             assert FLAGS.meta_batch_size == 1
             assert FLAGS.update_batch_size == 1
@@ -296,11 +359,13 @@ def main():
             dim_input = 3
         else:
             dim_input = data_generator.dim_input
-        if FLAGS.baseline == 'oracle':
-            FLAGS.pretrain_iterations += FLAGS.metatrain_iterations
-            FLAGS.metatrain_iterations = 0
     else:
         dim_input = data_generator.dim_input
+    if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'contextual':
+        FLAGS.pretrain_iterations += FLAGS.metatrain_iterations
+        FLAGS.metatrain_iterations = 0
+    if FLAGS.pred_task and FLAGS.datasource == 'sinusoid':
+        dim_output = 3  # 2 for pre-update, 1 for post-update. Will just contain all 3 for now
 
     if FLAGS.datasource == 'miniimagenet' or FLAGS.datasource == 'omniglot': # not including siamese omniglot
         tf_data_load = True
@@ -348,6 +413,17 @@ def main():
 
     exp_string = 'cls_'+str(FLAGS.num_classes)+'.mbs_'+str(FLAGS.meta_batch_size) + '.ubs_' + str(FLAGS.train_update_batch_size) + '.numstep' + str(FLAGS.num_updates) + '.updatelr' + str(FLAGS.train_update_lr) +'.metalr' + str(FLAGS.meta_lr)
 
+    if FLAGS.datadistr != 'stationary':
+        exp_string += FLAGS.datadistr +'.'
+    if FLAGS.learned_loss:
+        if FLAGS.label_in_loss:
+            exp_string += 'learned_labloss'
+        else:
+            exp_string += 'learned_loss'
+    if FLAGS.test_on_train:  # TODO - implement test_on_train
+        exp_string += 'test_on_train'
+    if FLAGS.pixel_dropout > 0:
+        exp_string += 'pdropout'
     if FLAGS.num_filters != 64:
         exp_string += 'hidden' + str(FLAGS.num_filters)
     if FLAGS.fc_hidden != 40:
@@ -356,7 +432,20 @@ def main():
         exp_string += 'numfc' + str(FLAGS.num_fc)
     if FLAGS.fc_linear != 0:
         exp_string += 'fclin' + str(FLAGS.fc_linear)
+    if FLAGS.pred_task:
+        exp_string += '.predtask.'
+    if FLAGS.learn_loss:
+        if FLAGS.semisup_loss:
+            exp_string += 'fixsemilearn2losswinput.'
+            assert not FLAGS.label_in_loss
+        else:
+            if FLAGS.label_in_loss:
+                exp_string += 'learn2losswinplbl.'
+            else:
+                exp_string += 'learn2losswinput.'
     exp_string += ''
+    if FLAGS.incl_switch:
+        exp_string += 'switch0.5'
 
 
     if FLAGS.max_pool:
@@ -382,6 +471,8 @@ def main():
     else:
         print('Norm setting not recognized.')
     #exp_string += 'conv13doublin'
+    if FLAGS.inner_sgd:
+        exp_string += 'sgd'
 
     resume_itr = 0
     model_file = None
@@ -394,7 +485,6 @@ def main():
         if FLAGS.test_iter > 0:
             model_file = model_file[:model_file.index('model')] + 'model' + str(FLAGS.test_iter)
         if model_file:
-            import pdb; pdb.set_trace()
             ind1 = model_file.index('model')
             resume_itr = int(model_file[ind1+5:])
             print("Restoring model weights from " + model_file)

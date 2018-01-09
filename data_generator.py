@@ -8,7 +8,7 @@ from skimage import transform
 
 from tensorflow.python.platform import flags
 from tensorflow.examples.tutorials.mnist import input_data
-from utils import get_images, load_transform
+from utils import get_images, load_transform, load_transform_color
 
 FLAGS = flags.FLAGS
 
@@ -30,9 +30,14 @@ class DataGenerator(object):
 
         if FLAGS.datasource == 'sinusoid':
             self.generate = self.generate_sinusoid_batch
-            self.amp_range = config.get('amp_range', [0.1, 5.0])
-            #self.amp_range = config.get('amp_range', [5.0, 10.0])
+            if FLAGS.train:
+                self.amp_range = config.get('amp_range', [0.1, 5.0])
+            else:
+                self.amp_range = config.get('amp_range', [5.0, 10.0])
+                #self.amp_range = config.get('amp_range', [0.1, 5.0])
             self.phase_range = config.get('phase_range', [0, np.pi])
+            #self.amp_range = config.get('amp_range', [0.0, 20.0])
+            #self.phase_range = config.get('phase_range', [0, 2*np.pi])
             self.input_range = config.get('input_range', [-5.0, 5.0])
             self.dim_input = 1
             self.dim_output = 1
@@ -54,16 +59,16 @@ class DataGenerator(object):
             num_train = config.get('num_train', 1200)
             self.metatrain_character_folders = character_folders[:num_train]
             self.metaval_character_folders = character_folders[num_train:]
-        elif 'mnist' in FLAGS.datasource:
+        elif 'mnist' in FLAGS.datasource and 'rainbow' not in FLAGS.datasource:
             self.generate = self.generate_mnist_batch
             self.img_size = config.get('img_size', (28, 28))
             self.dim_input = np.prod(self.img_size)
             self.dim_output = 10
-            self.num_classes = 10
             self.T = np.array([[1, 0,-14],[0, 1,-14],[0, 0, 1]])
             self.invT = np.linalg.inv(self.T)
-            #self.mnist = input_data.read_data_sets('/raid/cfinn/mnist_data', one_hot=True)
-            self.mnist = input_data.read_data_sets('/raid/cfinn/mnist_data', one_hot=False)
+            self.mnist = input_data.read_data_sets('/home/cfinn/mnist_data', one_hot=True)
+            #self.num_classes = 10
+            #self.mnist = input_data.read_data_sets('/home/cfinn/mnist_data', one_hot=False)
 
         elif 'omniglot' in FLAGS.datasource:
             self.num_classes = config.get('num_classes', FLAGS.num_classes)
@@ -87,6 +92,26 @@ class DataGenerator(object):
             else:
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
+        elif 'rainbow_mnist' in FLAGS.datasource:
+            # number of classes should be set to 1 for rainbow_mnist ( but dim output is 10 )
+            self.num_classes = 1 
+            assert FLAGS.num_classes == 1
+            self.img_size = config.get('img_size', (28, 28))
+            self.dim_input = np.prod(self.img_size) * 3
+            self.dim_output = 10 #self.num_classes
+            self.generate = self.generate_rainbow_mnist_batch
+            metatrain_folder = config.get('data_folder', '/home/cfinn/rainbow_mnist20b/train')
+            metaval_folder = config.get('data_folder', '/home/cfinn/rainbow_mnist20b/val')
+
+            self.metatrain_task_folders = [os.path.join(metatrain_folder, family) \
+                for family in os.listdir(metatrain_folder) \
+                if os.path.isdir(os.path.join(metatrain_folder, family)) ]
+            random.seed(1)
+            random.shuffle(self.metatrain_task_folders)
+            self.metaval_task_folders = [os.path.join(metaval_folder, family) \
+                for family in os.listdir(metaval_folder) \
+                if os.path.isdir(os.path.join(metaval_folder, family)) ]
+            self.rotations = config.get('rotations', [0])
         elif FLAGS.datasource == 'miniimagenet':
             self.num_classes = config.get('num_classes', FLAGS.num_classes)
             self.img_size = config.get('img_size', (84, 84))
@@ -193,10 +218,52 @@ class DataGenerator(object):
         all_label_batches = tf.one_hot(all_label_batches, self.num_classes)
         return all_image_batches, all_label_batches
 
-    def generate_sinusoid_batch(self, train=True, input_idx=None):
-        # Note train arg is not used (but it is used for omniglot method.
+    def get_sinusoid_amp_range(self, itr, train=True):
+        if FLAGS.datadistr == 'stationary':
+            if train:
+                return self.amp_range 
+            else:
+                return [5.0,10.0]
+        elif FLAGS.datadistr == 'continual5':
+            if train == True:
+              if itr < 10000: # 8k
+                return [0.0, 5.0]
+              elif itr < 20000:
+                return [0.0, 7.0]
+              elif itr < 30000:
+                return [0.0, 9.0]
+              elif itr < 40000:
+                return [0.0, 11.0]
+              elif itr < 50000:
+                return [0.0, 13.0]
+              #elif itr < 20000:
+                #return [0.0, 15.0]
+              #elif itr < 22000:
+                #return [0.0, 17.0]
+              else:
+                raise NotImplementedError('done training')
+            else:
+              if itr < 10000:
+                return [0.0, 5.0]
+              elif itr < 20000:
+                return [5.0, 7.0]
+              elif itr < 30000:
+                return [7.0, 9.0]
+              elif itr < 40000:
+                return [9.0, 11.0]
+              elif itr < 50000:
+                return [11.0, 13.0]
+              #elif itr < 20000:
+                #return [13.0, 15.0]
+              #elif itr < 22000:
+                #return [15.0, 17.0]
+              else:
+                raise NotImplementedError('done training')
+
+    def generate_sinusoid_batch(self, itr=-1, train=True, input_idx=None):
         # input_idx is used during qualitative testing --the number of examples used for the grad update
-        amp = np.random.uniform(self.amp_range[0], self.amp_range[1], [self.batch_size])
+        amp_range = self.get_sinusoid_amp_range(itr=itr, train=train)
+        amp = np.random.uniform(amp_range[0], amp_range[1], [self.batch_size])
         phase = np.random.uniform(self.phase_range[0], self.phase_range[1], [self.batch_size])
         outputs = np.zeros([self.batch_size, self.num_samples_per_task, self.dim_output])
         init_inputs = np.zeros([self.batch_size, self.num_samples_per_task, self.dim_input])
@@ -208,8 +275,8 @@ class DataGenerator(object):
         return init_inputs, outputs, amp, phase
 
     def sample_img_transform(self):
-        scale_range = [1,2]
-        rotation_range = [-np.pi/2, np.pi/2]
+        scale_range = [1,3] #2]
+        rotation_range = [-np.pi, np.pi] #/2, np.pi/2]
         shear_range = [-np.pi/4.0, np.pi/4.0]
         sc = np.random.uniform(scale_range[0], scale_range[1], (2))
         rot = np.random.uniform(rotation_range[0], rotation_range[1])
@@ -219,6 +286,7 @@ class DataGenerator(object):
         tform = transform.AffineTransform(new_params)
         return tform
 
+    """
     def generate_mnist_batch(self, train=True):
         #from tensorflow.examples.tutorials.mnist import input_data
         #mnist = input_data.read_data_sets(self.data_folder, one_hot=False)
@@ -245,24 +313,78 @@ class DataGenerator(object):
         return inputs, outputs, None, None
 
     """
-    def generate_mnist_batch(self, train=True):
+    def generate_mnist_batch(self, train=True, itr=None):
 
         batch_size = self.batch_size
         inputs = np.zeros([batch_size, self.num_samples_per_task, self.dim_input], dtype=np.float32)
         outputs = np.zeros([batch_size, self.num_samples_per_task, self.dim_output], dtype=np.int32)
 
-        imgs, labels = self.mnist.train.next_batch(self.num_samples_per_task*batch_size)
+        if train:
+            imgs, labels = self.mnist.train.next_batch(self.num_samples_per_task*batch_size) 
+        else:
+            imgs, labels = self.mnist.validation.next_batch(self.num_samples_per_task*batch_size) 
         for i in range(batch_size):
             begin = i*self.num_samples_per_task
             end = (i+1)*self.num_samples_per_task
             task_imgs = imgs[begin:end]
+            if FLAGS.incl_switch and random.uniform(0,1) > 0.5:
+                task_imgs_reshaped = np.reshape(task_imgs, [self.num_samples_per_task,28,28])
+                # switch top and bottom of image (or left and right?)
+                task_imgs = np.reshape(np.concatenate([task_imgs_reshaped[:,14:,:], task_imgs_reshaped[:,:14,:]], 1) , [self.num_samples_per_task, -1]) 
             task_labels = labels[begin:end]
             task_tform = self.sample_img_transform()
             tformed = np.array([np.reshape(transform.warp(np.reshape(img, (28,28,1)),task_tform), (-1)) for img in task_imgs])
             inputs[i] = tformed
             outputs[i] = task_labels
         return inputs, outputs, None, None
-    """
+
+    def generate_rainbow_mnist_batch(self, train=True, itr=None):  # RGB images
+
+        inputs = np.zeros([self.batch_size, self.num_samples_per_task, self.dim_input], dtype=np.float32)
+        outputs = np.zeros([self.batch_size, self.num_samples_per_task, self.dim_output], dtype=np.int32)
+
+        #assert self.num_samples_per_task <= 5
+        #assert self.num_classes == 10
+
+        if train:
+            folders = self.metatrain_task_folders
+        else:
+            folders = self.metaval_task_folders
+        # sample tasks
+        task_folders = [random.choice(folders) for _ in range(self.batch_size)]
+
+        for i in range(self.batch_size):
+            tfolder = task_folders[i]
+            end_dir = tfolder[tfolder.rfind('/')+1:]
+            first_imagefilepaths = None
+            train_dirs = [end_dir in fold for fold in self.metatrain_task_folders]
+            first_image_filepaths = None
+            if np.any(train_dirs):
+                first_train_dir_id = [i for i, x in enumerate(train_dirs) if x][0]
+                first_train_dir = self.metatrain_task_folders[first_train_dir_id]
+                first_image_filepaths = [os.path.join(first_train_dir, family, img_name) \
+                    for family in os.listdir(first_train_dir) \
+                    for img_name in os.listdir(os.path.join(first_train_dir, family))]
+
+            image_filepaths = [os.path.join(task_folders[i], family, img_name) \
+                for family in os.listdir(task_folders[i]) \
+                for img_name in os.listdir(os.path.join(task_folders[i], family))]
+            # sample num_samples_per_task images, num_samples_per_task should be <= 5
+            if first_image_filepaths is not None:
+                assert not FLAGS.inner_sgd # not supported
+                sampled_filepaths = np.random.choice(first_image_filepaths, size=int(self.num_samples_per_task/2), replace=False)
+                second_filepaths = np.random.choice(image_filepaths, size=int(self.num_samples_per_task/2), replace=False)
+                sampled_filepaths = np.concatenate([sampled_filepaths, second_filepaths])
+            else:
+                sampled_filepaths = np.random.choice(image_filepaths, size=self.num_samples_per_task, replace=False)
+            images = [np.reshape(np.array(load_transform_color(filename, size=self.img_size)), (-1)) for filename in sampled_filepaths]
+            inputs[i] = np.array(images)
+
+            # extract label, convert to one-hot
+            scalar_labels = [int(sampled_filepaths[i][-12]) for i in range(self.num_samples_per_task)]
+            outputs[i, np.arange(self.num_samples_per_task), scalar_labels] = 1.0
+        return inputs, outputs, None, None
+
 
 
     def generate_omniglot_batch(self, train=True):

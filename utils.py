@@ -52,16 +52,51 @@ def normalize(inp, activation, reuse, scope, bn_vars=None):
         return activation(inp)
 
 ## Loss functions
-def mse(pred, label):
+# This is called on a per task basis
+def mse(pred, label, sine_x=None, loss_weights=None, postupdate=None):
+    if FLAGS.pred_task and postupdate == False:
+        if FLAGS.learn_loss:
+            #inp = tf.concat([pred, label[:, 1:]], 1)
+            if FLAGS.label_in_loss:
+                inp = tf.concat([sine_x, pred, label[:, :]], 1)
+            else:
+                inp = tf.concat([sine_x, pred, label[:, 1:]], 1)
+            hidden = tf.nn.relu(tf.matmul(inp, loss_weights['lw1']) + loss_weights['lb1'])
+            hidden = tf.nn.relu(tf.matmul(hidden, loss_weights['lw2']) + loss_weights['lb2'])
+            preloss = tf.square(tf.matmul(hidden, loss_weights['lw3']) + loss_weights['lb3'])
+            learned_loss = tf.reduce_mean(preloss)
+            if FLAGS.semisup_loss: 
+                #true_loss = tf.reduce_mean(tf.square(tf.reshape(pred, [-1]) - tf.reshape(label, [-1])))
+                # fix to only predict y, not task
+                true_loss = tf.reduce_mean(tf.square(tf.reshape(pred[:,0], [-1]) - tf.reshape(label[:,0], [-1])))
+                if FLAGS.train:
+                    pick_loss = tf.cast(tf.random_uniform((1,)) > 0.5, tf.float32)
+                else: 
+                    pick_loss = 1.0
+                return pick_loss*learned_loss + (1.0-pick_loss)*true_loss
+            else:
+                return learned_loss
+        else:
+            # only use last two entries (amp and phase)
+            pred = pred[:, 1:]
+            label = label[:, 1:]
+    elif FLAGS.pred_task and postupdate == True:
+        pred = pred[:, 0]
+        label = label[:, 0]
+    elif FLAGS.pred_task:
+        raise ValueError('post update var must be set in mse loss')
+
     pred = tf.reshape(pred, [-1])
     label = tf.reshape(label, [-1])
     return tf.reduce_mean(tf.square(pred-label))
 
-def xent(pred, label):
+def xent(pred, label, **kwargs):
     # Note - with tf version <=0.12, this loss has incorrect 2nd derivatives
+    label *= 0.9
+    label += 0.01
     return tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size
 
-def sigmoid_xent(pred, label):
+def sigmoid_xent(pred, label, **kwargs):
     return tf.nn.sigmoid_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size
 
 
@@ -73,10 +108,26 @@ def load_transform(image_path, angle=0., s=(0, 0), size=(20, 20)):
   # Shift the image
   shifted = shift(rotated, shift=s)
   # Resize the image
-  resized = np.asarray(imresize(rotated, size=size, interp='lanczos'), dtype=np.float32) / 255.
+  resized = np.asarray(imresize(shifted, size=size, interp='lanczos'), dtype=np.float32) / 255.
   #return resized
   # Invert the image
   inverted = 1. - resized
   return inverted
+
+def load_transform_color(image_path, angle=0., s=(0, 0), size=(20, 20)):
+    original = np.float32(imread(image_path))
+    assert np.max(original) > 1.
+    original /= 255.
+
+    rotated = np.maximum(np.minimum(rotate(original, angle=angle, cval=1.), 1.), 0.)
+    s = (s[0], s[1], 0)
+    shifted = shift(rotated, shift=s)
+    resized = imresize(shifted, size=size, interp='lanczos')
+
+    return resized
+
+
+
+
 
 
