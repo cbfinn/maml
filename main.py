@@ -24,6 +24,7 @@ Usage Instructions:
     For omniglot and miniimagenet training, acquire the dataset online, put it in the correspoding data directory, and see the python script instructions in that directory to preprocess the data.
 """
 import csv
+import glob
 import numpy as np
 import pickle
 import random
@@ -51,6 +52,7 @@ flags.DEFINE_bool('semisup_loss', False, 'whether or not to use a semi-supervise
 
 flags.DEFINE_bool('update_bn', False, 'whether or not to update the batch normalization variables in the inner update')
 flags.DEFINE_bool('update_bn_only', False, 'whether or not to *only* update the batch normalization variables in the inner update')
+flags.DEFINE_bool('shuffle_tasks', False, 'whether or not to shuffle the tasks, when loading data, only for rainbow mnist.')
 
 flags.DEFINE_bool('nearest_neighbor', False, 'test time only - eval classification using nearest neighbor in pixel space')
 
@@ -60,6 +62,8 @@ flags.DEFINE_bool('learned_loss', False, 'whether or not to use a learned inner 
 flags.DEFINE_bool('test_on_train', False, 'inner and outer dataset the same')
 flags.DEFINE_bool('inner_sgd', False, 'whether or not to SGD in the inner loop')
 flags.DEFINE_float('pixel_dropout', 0.0, 'pixel dropout percentage')
+flags.DEFINE_bool('learn_loss_only', False, 'outer objective only includes loss function parameters')
+flags.DEFINE_bool('zerok_shot', False, 'meta objective of both zero shot and k shot.')
 
 ## Training options
 flags.DEFINE_integer('pretrain_iterations', 0, 'number of pre-training iterations.')
@@ -318,7 +322,7 @@ def main():
             if FLAGS.train == True:
                 test_num_updates = 10
             else:
-                test_num_updates = 1 # 50
+                test_num_updates = 20 # 50
 
     if FLAGS.train == False:
         orig_meta_batch_size = FLAGS.meta_batch_size
@@ -328,14 +332,14 @@ def main():
     if FLAGS.datasource == 'sinusoid':
         assert not FLAGS.inner_sgd # not yet supported
         data_generator = DataGenerator(FLAGS.update_batch_size*2, FLAGS.meta_batch_size)
-    elif FLAGS.datasource == 'rainbow_mnist':
+    elif  'rainbow_mnist' in FLAGS.datasource:
         #assert FLAGS.update_batch_size < 5  # only 5 images per task
         # was 5, now udpate_batch_size*2
         if FLAGS.inner_sgd:
             test_num_updates = FLAGS.num_updates
             data_generator = DataGenerator(FLAGS.update_batch_size*(FLAGS.num_updates+1), FLAGS.meta_batch_size)
         else:
-            data_generator = DataGenerator(min(FLAGS.update_batch_size*2, 20), FLAGS.meta_batch_size)
+            data_generator = DataGenerator(min(FLAGS.update_batch_size*2, 100), FLAGS.meta_batch_size)
     else:
         assert not FLAGS.inner_sgd # not yet supported
         if FLAGS.metatrain_iterations == 0 and FLAGS.datasource == 'miniimagenet':
@@ -398,10 +402,6 @@ def main():
         model.construct_model(input_tensors=metaval_input_tensors, prefix='metaval_')
     model.summ_op = tf.summary.merge_all()
 
-    saver = loader = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=10)
-
-    sess = tf.InteractiveSession()
-
     if FLAGS.train == False:
         # change to original meta batch size when loading model.
         FLAGS.meta_batch_size = orig_meta_batch_size
@@ -420,6 +420,8 @@ def main():
             exp_string += 'learned_labloss'
         else:
             exp_string += 'learned_loss'
+    if FLAGS.shuffle_tasks:
+        exp_string += 'task_shuffle'
     if FLAGS.test_on_train:  # TODO - implement test_on_train
         exp_string += 'test_on_train'
     if FLAGS.pixel_dropout > 0:
@@ -473,22 +475,42 @@ def main():
     #exp_string += 'conv13doublin'
     if FLAGS.inner_sgd:
         exp_string += 'sgd'
+    if FLAGS.zerok_shot:
+        exp_string += '0kshot'
 
     resume_itr = 0
     model_file = None
 
+    saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=10)
+    sess = tf.InteractiveSession()
     tf.global_variables_initializer().run()
     tf.train.start_queue_runners()
 
     if FLAGS.resume or not FLAGS.train:
         model_file = tf.train.latest_checkpoint(FLAGS.logdir + '/' + exp_string)
+        if model_file is None and FLAGS.learn_loss_only:
+            # Loading from first oracle
+            #oracle_dir = glob.glob(FLAGS.logdir + '/cls' + '*oracle*')
+            oracle_dir = glob.glob(FLAGS.logdir + '/cls' + '*learned_loss*')
+            if oracle_dir:
+                print('Optionally loading from other checkpoint')
+                model_file = tf.train.latest_checkpoint(oracle_dir[0])
+                loaded_oracle = True
+                #loader = tf.train.Saver([var for var in tf.trainable_variables() if 'loss' not in var.name], max_to_keep=10)
+                loader = tf.train.Saver([var for var in tf.trainable_variables()], max_to_keep=10)
+                # if you don't want to load from oracle, set model_file = None
+                import pdb; pdb.set_trace()
+        else:
+            loaded_oracle = False
+            loader = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=10)
+            if model_file:
+                ind1 = model_file.index('model')
+                resume_itr = int(model_file[ind1+5:])
         if FLAGS.test_iter > 0:
             model_file = model_file[:model_file.index('model')] + 'model' + str(FLAGS.test_iter)
         if model_file:
-            ind1 = model_file.index('model')
-            resume_itr = int(model_file[ind1+5:])
             print("Restoring model weights from " + model_file)
-            saver.restore(sess, model_file)
+            loader.restore(sess, model_file)
 
     if FLAGS.train:
         train(model, saver, sess, exp_string, data_generator, resume_itr)

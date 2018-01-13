@@ -100,8 +100,8 @@ class DataGenerator(object):
             self.dim_input = np.prod(self.img_size) * 3
             self.dim_output = 10 #self.num_classes
             self.generate = self.generate_rainbow_mnist_batch
-            metatrain_folder = config.get('data_folder', '/home/cfinn/rainbow_mnist20b/train')
-            metaval_folder = config.get('data_folder', '/home/cfinn/rainbow_mnist20b/val')
+            metatrain_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource +'/train')
+            metaval_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource + '/val')
 
             self.metatrain_task_folders = [os.path.join(metatrain_folder, family) \
                 for family in os.listdir(metatrain_folder) \
@@ -355,20 +355,26 @@ class DataGenerator(object):
 
         for i in range(self.batch_size):
             tfolder = task_folders[i]
-            end_dir = tfolder[tfolder.rfind('/')+1:]
-            first_imagefilepaths = None
-            train_dirs = [end_dir in fold for fold in self.metatrain_task_folders]
+
             first_image_filepaths = None
-            if np.any(train_dirs):
+            end_dir = tfolder[tfolder.rfind('/')+1:]
+            train_dirs = [end_dir in fold for fold in self.metatrain_task_folders]
+            if np.any(train_dirs) and train == False:
                 first_train_dir_id = [i for i, x in enumerate(train_dirs) if x][0]
                 first_train_dir = self.metatrain_task_folders[first_train_dir_id]
                 first_image_filepaths = [os.path.join(first_train_dir, family, img_name) \
                     for family in os.listdir(first_train_dir) \
                     for img_name in os.listdir(os.path.join(first_train_dir, family))]
 
-            image_filepaths = [os.path.join(task_folders[i], family, img_name) \
-                for family in os.listdir(task_folders[i]) \
-                for img_name in os.listdir(os.path.join(task_folders[i], family))]
+            if FLAGS.shuffle_tasks:
+                image_filepaths = [os.path.join(folder, family, img_name) \
+                    for folder  in folders \
+                    for family in os.listdir(folder) \
+                    for img_name in os.listdir(os.path.join(folder, family))]
+            else:
+                image_filepaths = [os.path.join(task_folders[i], family, img_name) \
+                    for family in os.listdir(task_folders[i]) \
+                    for img_name in os.listdir(os.path.join(task_folders[i], family))]
             # sample num_samples_per_task images, num_samples_per_task should be <= 5
             if first_image_filepaths is not None:
                 assert not FLAGS.inner_sgd # not supported
@@ -381,7 +387,7 @@ class DataGenerator(object):
             inputs[i] = np.array(images)
 
             # extract label, convert to one-hot
-            scalar_labels = [int(sampled_filepaths[i][-12]) for i in range(self.num_samples_per_task)]
+            scalar_labels = [int(sampled_filepaths[i][sampled_filepaths[i].rfind('/')-1]) for i in range(self.num_samples_per_task)]
             outputs[i, np.arange(self.num_samples_per_task), scalar_labels] = 1.0
         return inputs, outputs, None, None
 

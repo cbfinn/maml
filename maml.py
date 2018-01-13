@@ -23,7 +23,7 @@ class MAML:
             self.loss_func = mse
             self.forward = self.forward_fc
             self.construct_weights = self.construct_fc_weights
-        elif 'omniglot' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist', 'rainbow_mnist']:
+        elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist']:
             if 'siamese' in FLAGS.datasource:
                 self.loss_func = sigmoid_xent
             else:
@@ -77,18 +77,10 @@ class MAML:
 
         # selfs are placeholders, nonselfs will be overwritten
         inputa, inputb, labela, labelb = self.inputa, self.inputb, self.labela, self.labelb
-        masks = [None]*FLAGS.meta_batch_size  # pixel dropout mask
 
         if FLAGS.test_on_train:
             inputa = inputb
             labela = labelb
-        if FLAGS.pixel_dropout > 0:
-            masks = tf.random_uniform([FLAGS.meta_batch_size, FLAGS.update_batch_size, self.img_size*self.img_size*self.channels])
-            masks = tf.greater(masks, FLAGS.pixel_dropout)
-            if FLAGS.test_on_train:
-                inputb = inputa = tf.cast(masks, tf.float32) * inputa
-            else:
-                inputa = tf.cast(masks, tf.float32) * inputa
         if FLAGS.baseline == 'contextual':
             # TODO - why is this not working?
             assert not FLAGS.test_on_train
@@ -137,7 +129,7 @@ class MAML:
 
             def task_metalearn(inp, reuse=True):
                 """ Perform gradient descent for one task in the meta-batch. """
-                task_inputa, task_inputb, task_labela, task_labelb, mask = inp
+                task_inputa, task_inputb, task_labela, task_labelb = inp
                 task_outputbs, task_lossesb = [], []
                 if self.classification:
                     task_accuraciesb = []
@@ -151,7 +143,7 @@ class MAML:
                     task_labelas = [task_labela]*num_updates
 
 
-                task_outputa, _ = self.forward(task_inputas[0], weights, reuse=reuse, mask=mask, ind=0)  # only reuse on the first iter
+                task_outputa, _ = self.forward(task_inputas[0], weights, reuse=reuse, ind=0)  # only reuse on the first iter
                 task_lossa = self.inner_loss_func(task_outputa, task_labelas[0], sine_x=task_inputas[0], postupdate=False, loss_weights=self.loss_weights)
 
                 grads = tf.gradients(task_lossa, list(weights.values()))
@@ -165,18 +157,12 @@ class MAML:
                         if 'scale' not in key and 'offset' not in key:
                             fast_weights[key] = weights[key]
 
-                if FLAGS.test_on_train:
-                    maskb = mask
-                else:
-                    maskb = None
-                output, _ = self.forward(task_inputb, fast_weights, reuse=True, mask=maskb)
+                output, _ = self.forward(task_inputb, fast_weights, reuse=True)
                 task_outputbs.append(output)
                 task_lossesb.append(self.loss_func(output, task_labelb, postupdate=True))
 
                 for j in range(num_updates - 1):
-                    output_j, viz = self.forward(task_inputas[j+1], fast_weights, reuse=True, mask=mask, ind=j+1)
-                    if j+1 == FLAGS.num_updates:
-                        output_viz = viz 
+                    output_j, _ = self.forward(task_inputas[j+1], fast_weights, reuse=True, ind=j+1)
                     loss = self.inner_loss_func(output_j, task_labelas[j+1], sine_x=task_inputa, postupdate=False, loss_weights=self.loss_weights)
                     grads = tf.gradients(loss, list(fast_weights.values()))
                     if FLAGS.stop_grad:
@@ -189,7 +175,7 @@ class MAML:
                             if 'scale' not in key and 'offset' not in key:
                                 fast_weights[key] = weights[key]
 
-                    output, _ = self.forward(task_inputb, fast_weights, reuse=True, mask=maskb)
+                    output, _ = self.forward(task_inputb, fast_weights, reuse=True)
                     task_outputbs.append(output)
                     task_lossesb.append(self.loss_func(output, task_labelb, postupdate=True))
 
@@ -208,24 +194,23 @@ class MAML:
                             task_accuraciesb.append( tf.reduce_mean(tf.cast(correct_pred, tf.float32)) )
                     task_output.extend([task_accuracya, task_accuraciesb])
 
-                task_output.append(output_viz)
+                #task_output.append(output_viz)
 
                 return task_output
 
             if FLAGS.norm is not 'None':
                 # to initialize the batch norm vars, might want to combine this, and not run idx 0 twice.
-                unused = task_metalearn((inputa[0], inputb[0], labela[0], labelb[0], masks[0]), False)
+                unused = task_metalearn((inputa[0], inputb[0], labela[0], labelb[0]), False)
 
             out_dtype = [tf.float32, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates]
             if self.classification:
                 out_dtype.extend([tf.float32, [tf.float32]*num_updates])
-            out_dtype.append(tf.float32)
-            result = tf.map_fn(task_metalearn, elems=(inputa, inputb, labela, labelb, masks), dtype=out_dtype, parallel_iterations=FLAGS.meta_batch_size)
+            #out_dtype.append(tf.float32)
+            result = tf.map_fn(task_metalearn, elems=(inputa, inputb, labela, labelb), dtype=out_dtype, parallel_iterations=FLAGS.meta_batch_size)
             if self.classification:
-                outputas, outputbs, lossesa, lossesb, accuraciesa, accuraciesb, viz = result
+                outputas, outputbs, lossesa, lossesb, accuraciesa, accuraciesb = result
             else:
-                outputas, outputbs, lossesa, lossesb, viz = result
-            tf.summary.image('inputation', viz[0])
+                outputas, outputbs, lossesa, lossesb = result
 
         ## Performance & Optimization
         if 'train' in prefix:
@@ -243,11 +228,22 @@ class MAML:
 
             if FLAGS.metatrain_iterations > 0:
                 optimizer = tf.train.AdamOptimizer(self.meta_lr)
-                self.gvs = gvs = optimizer.compute_gradients(self.total_losses2[FLAGS.num_updates-1])
+                var_list = None
+                if FLAGS.learn_loss_only:
+                    assert FLAGS.learned_loss
+                    var_list = [var for var in tf.trainable_variables() if 'loss' in var.name]
+                if FLAGS.zerok_shot:
+                    if FLAGS.inner_sgd:
+                        meta_objective = sum(self.total_losses2[:FLAGS.num_updates]) + self.total_loss1
+                    else:
+                        meta_objective = self.total_losses2[FLAGS.num_updates-1] + self.total_loss1
+                else:
+                    meta_objective = self.total_losses2[FLAGS.num_updates-1]
+                self.gvs = gvs = optimizer.compute_gradients(meta_objective, var_list=var_list)
                 if FLAGS.datasource == 'miniimagenet':
                     gvs = [(tf.clip_by_value(grad, -10, 10), var) for grad, var in gvs]
                 self.metatrain_op = optimizer.apply_gradients(gvs)
-                tf.summary.scalar(prefix+'Optimized loss', self.total_losses2[FLAGS.num_updates-1])
+                tf.summary.scalar(prefix+'Optimized loss', meta_objective)
             else:
                 tf.summary.scalar(prefix+'Optimized loss', self.total_loss1)
                 #optimizer = tf.train.AdamOptimizer(self.meta_lr)
@@ -276,17 +272,25 @@ class MAML:
     def learned_loss(self, pred, label=None, **kwargs):
         # Label is unused, to match the signature of other losses.
         if FLAGS.label_in_loss:
-            pred = tf.concat([pred,label], -1)
+            #pred = tf.concat([pred,label], -1)
+            pred = tf.nn.softmax(pred) - label
         fc_init =  tf.contrib.layers.xavier_initializer(dtype=tf.float32)   
         if 'loss_weights' not in dir(self) or self.loss_weights is None:
+            hidden_dim = 40
             self.loss_weights = {}
             if FLAGS.label_in_loss:
-                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output*2, 1]))  
+                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1')  
             else:
-                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, 1]))  
-            self.loss_weights['b1'] = tf.Variable(tf.zeros([1])) 
+                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1') 
+            #self.loss_weights['w2'] = tf.Variable(fc_init([hidden_dim, 1]), name='loss_w2')  
+            self.loss_weights['b1'] = tf.Variable(tf.zeros([40]), name='loss_b1') 
+            #self.loss_weights['b2'] = tf.Variable(tf.zeros([1]), name='loss_b2') 
+        #hidden = tf.nn.relu(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])  
+        #loss = tf.square(tf.matmul(hidden, self.loss_weights['w2']) + self.loss_weights['b2'])  
         # don't square this?  
-        loss = tf.square(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])  
+        #loss = tf.square(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])  
+        # logit mse
+        loss = tf.reduce_sum(tf.square(pred))
         return loss   
 
     def construct_loss_weights(self):
@@ -325,7 +329,7 @@ class MAML:
         weights['b'+str(len(self.dim_hidden)+1)] = tf.Variable(tf.zeros([self.dim_output]))
         return weights
 
-    def forward_fc(self, inp, weights, reuse=False, mask=None):
+    def forward_fc(self, inp, weights, reuse=False):
         if FLAGS.update_bn or FLAGS.update_bn_only:
             raise NotImplementedError('update bn not yet supported for fc net')
         if FLAGS.context_var:
@@ -381,12 +385,9 @@ class MAML:
         else:
             weights['w5'] = tf.Variable(tf.random_normal([self.dim_hidden, self.dim_output]), name='w5')
             weights['b5'] = tf.Variable(tf.zeros([self.dim_output]), name='b5')
-        if FLAGS.pixel_dropout > 0:
-            weights['image_bt'] = tf.Variable(10*tf.random_normal([1, self.img_size, self.img_size, self.channels]), name='image_bt')
-            weights['image_bt'] = tf.tile(weights['image_bt'], [FLAGS.update_batch_size, 1, 1, 1])
         return weights
 
-    def forward_conv(self, inp, weights, reuse=False, scope='', mask=None, ind=None):
+    def forward_conv(self, inp, weights, reuse=False, scope='', ind=None):
         # reuse is for the normalization parameters.
         if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource:
             channels = 3 # TODO - don't hardcode.
@@ -398,15 +399,6 @@ class MAML:
             channels *= (FLAGS.update_batch_size + 1)
         inp = tf.reshape(inp, [-1, self.img_size, self.img_size, channels])
 
-        viz_inp = None
-        if FLAGS.pixel_dropout > 0 and mask is not None:
-            assert not FLAGS.context_var # not supported
-            mask = tf.reshape(mask, [FLAGS.update_batch_size, self.img_size, self.img_size, channels])
-            pre_inp = inp
-            #tf.summary.image('masked_image' + str(ind), inp)
-            inp = pre_inp + (1.0-tf.cast(mask, tf.float32)) * weights['image_bt']
-            viz_inp = tf.concat([pre_inp, inp, weights['image_bt']], axis=2)
-            #tf.summary.image('imputed_image' + str(ind), inp)
         if FLAGS.context_var:
             num_examp = int(inp.get_shape()[0])
 
@@ -461,6 +453,6 @@ class MAML:
             hidden4 = tf.concat([hidden4, context], 1)
 
         # inputs are returned for visualization purposes
-        return tf.matmul(hidden4, weights['w5']) + weights['b5'], viz_inp
+        return tf.matmul(hidden4, weights['w5']) + weights['b5'], None
 
 
