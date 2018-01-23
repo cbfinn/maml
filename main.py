@@ -126,6 +126,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         train_examples *= FLAGS.num_updates
 
     for itr in range(resume_itr, FLAGS.pretrain_iterations + FLAGS.metatrain_iterations):
+        # TODO - modify this for pushing?
         # **NORMAL is % 1k, % 25
         # **SLOW is % 2k, % 50
         # **EXTRASLOW is % 4k, % 100
@@ -165,6 +166,9 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
             inputa = batch_x[:, :train_examples, :]
             labela = batch_y[:, :train_examples, :]
             feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb}
+            if 'push' in FLAGS.datasource:
+                feed_dict[model.statea] = amp[:, :train_examples, :] # b used for testing
+                feed_dict[model.stateb] = amp[:, train_examples:, :]
 
         if itr < FLAGS.pretrain_iterations or (FLAGS.baseline == 'online' and itr % 2 == 1) or (FLAGS.alternate_grad_meta and itr % 2 == 1):
             input_tensors = [model.pretrain_op]
@@ -231,9 +235,12 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                 val_inputb = batch_x[:, train_examples:, :]
                 val_labela = batch_y[:, :train_examples, :]
                 val_labelb = batch_y[:, train_examples:, :]
+                feed_dict = {model.inputa: val_inputa, model.inputb: val_inputb,  model.labela: val_labela, model.labelb: val_labelb, model.meta_lr: 0.0}
+                if 'push' in FLAGS.datasource:
+                    feed_dict[model.statea] = amp[:, :train_examples, :] # b used for testing
+                    feed_dict[model.stateb] = amp[:, train_examples:, :]
                 if not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
                     train_examples = -train_examples
-                feed_dict = {model.inputa: val_inputa, model.inputb: val_inputb,  model.labela: val_labela, model.labelb: val_labelb, model.meta_lr: 0.0}
                 input_tensors = [model.total_loss1, model.total_losses2[FLAGS.num_updates-1]]
                 if model.classification:
                     input_tensors.extend([model.total_accuracy1, model.total_accuracies2[FLAGS.num_updates-1]])
