@@ -38,6 +38,28 @@ def conv_block(inp, cweight, bweight, reuse, scope, bn_vars=None, incl_stride=Tr
         normed = tf.nn.max_pool(normed, stride, stride, 'VALID')
     return normed
 
+
+def init_conv_weights_xavier(shape, name=None):
+    conv_initializer =  tf.contrib.layers.xavier_initializer_conv2d(dtype=tf.float32)
+    return safe_get(name, list(shape), initializer=conv_initializer, dtype=tf.float32)
+
+def init_weights(shape, name=None):
+    shape = tuple(shape)
+    weights = np.random.normal(scale=0.01, size=shape).astype('f')
+    return safe_get(name, list(shape), initializer=tf.constant_initializer(weights), dtype=tf.float32)
+
+
+def init_bias(shape, name=None):
+    return safe_get(name, initializer=tf.zeros(shape, dtype=tf.float32))
+
+def safe_get(name, *args, **kwargs):
+    """ Same as tf.get_variable, except flips on reuse_variables automatically """
+    try:
+        return tf.get_variable(name, *args, **kwargs)
+    except ValueError:
+        tf.get_variable_scope().reuse_variables()
+        return tf.get_variable(name, *args, **kwargs)
+
 def normalize(inp, activation, reuse, scope, bn_vars=None):
     if FLAGS.norm == 'batch_norm':
         if bn_vars == None:
@@ -51,9 +73,12 @@ def normalize(inp, activation, reuse, scope, bn_vars=None):
     elif FLAGS.norm == 'None':
         return activation(inp)
 
+
+
 ## Loss functions
 # This is called on a per task basis
-def mse(pred, label, sine_x=None, loss_weights=None, postupdate=None):
+def mse(pred, label, multiplier=1.0, sine_x=None, loss_weights=None, postupdate=None):
+    pred, label = multiplier*pred, multiplier*label
     if FLAGS.pred_task and postupdate == False:
         if FLAGS.learn_loss:
             #inp = tf.concat([pred, label[:, 1:]], 1)
@@ -94,7 +119,7 @@ def xent(pred, label, **kwargs):
     # Note - with tf version <=0.12, this loss has incorrect 2nd derivatives
     label *= 0.9
     label += 0.01
-    return tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size
+    return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label)) # / FLAGS.update_batch_size
 
 def sigmoid_xent(pred, label, **kwargs):
     return tf.nn.sigmoid_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size

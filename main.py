@@ -37,7 +37,7 @@ from tensorflow.python.platform import flags
 FLAGS = flags.FLAGS
 
 ## Dataset/method options
-flags.DEFINE_string('datasource', 'sinusoid', 'sinusoid or omniglot or miniimagenet or siamese_omniglot')
+flags.DEFINE_string('datasource', 'sinusoid', 'sinusoid or omniglot or miniimagenet or siamese_omniglot or cont_push')
 flags.DEFINE_string('datadistr', 'stationary', 'stationary or continual1')
 flags.DEFINE_integer('num_classes', 5, 'number of classes used in classification (e.g. 5-way classification).')
 # oracle means task id is input (only suitable for sinusoid)
@@ -63,7 +63,12 @@ flags.DEFINE_bool('test_on_train', False, 'inner and outer dataset the same')
 flags.DEFINE_bool('inner_sgd', False, 'whether or not to SGD in the inner loop')
 flags.DEFINE_float('pixel_dropout', 0.0, 'pixel dropout percentage')
 flags.DEFINE_bool('learn_loss_only', False, 'outer objective only includes loss function parameters')
+
+## Continual learning flags
 flags.DEFINE_bool('zerok_shot', False, 'meta objective of both zero shot and k shot.')
+flags.DEFINE_bool('cont_finetune_on_all', True, 'finetune on all data so far.')
+flags.DEFINE_bool('cont_incl_cur', True, 'include the current task in meta-training.')
+flags.DEFINE_bool('train_only_on_cur', False, 'only train on the current task.')
 
 ## Training options
 flags.DEFINE_integer('pretrain_iterations', 0, 'number of pre-training iterations.')
@@ -121,6 +126,19 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         train_examples *= FLAGS.num_updates
 
     for itr in range(resume_itr, FLAGS.pretrain_iterations + FLAGS.metatrain_iterations):
+        # **NORMAL is % 1k, % 25
+        # **SLOW is % 2k, % 50
+        # **EXTRASLOW is % 4k, % 100
+        TASK_ITER = 2000
+        BATCH_ITER = 50
+        # initialize continual learning at this iteration
+        INIT_CONT = TASK_ITER / 2
+        if itr >= TASK_ITER / 2 and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
+            if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
+                data_generator.add_task()
+                #tf.global_variables_initializer().run()
+            elif itr % BATCH_ITER == 0:
+                data_generator.add_batch()
         feed_dict = {}
         if 'generate' in dir(data_generator):
             batch_x, batch_y, amp, phase = data_generator.generate(itr=itr)
@@ -205,10 +223,16 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                           batch_y[i, :, 1] = amp[i]
                           batch_y[i, :, 2] = phase[i] 
 
+                # using -train_examples for val.
+                # finetune_on_all means include all data thus far
+                if not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+                    train_examples = -train_examples
                 val_inputa = batch_x[:, :train_examples, :]
                 val_inputb = batch_x[:, train_examples:, :]
                 val_labela = batch_y[:, :train_examples, :]
                 val_labelb = batch_y[:, train_examples:, :]
+                if not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+                    train_examples = -train_examples
                 feed_dict = {model.inputa: val_inputa, model.inputb: val_inputb,  model.labela: val_labela, model.labelb: val_labelb, model.meta_lr: 0.0}
                 input_tensors = [model.total_loss1, model.total_losses2[FLAGS.num_updates-1]]
                 if model.classification:
@@ -320,7 +344,10 @@ def main():
                 test_num_updates = 10
         else:
             if FLAGS.train == True:
-                test_num_updates = 10
+                if FLAGS.baseline == 'oracle':
+                    test_num_updates = 1
+                else:
+                    test_num_updates = 10
             else:
                 test_num_updates = 20 # 50
 
@@ -365,6 +392,7 @@ def main():
             dim_input = data_generator.dim_input
     else:
         dim_input = data_generator.dim_input
+    dim_state_input = data_generator.dim_state_input
     if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'contextual':
         FLAGS.pretrain_iterations += FLAGS.metatrain_iterations
         FLAGS.metatrain_iterations = 0
@@ -395,7 +423,7 @@ def main():
         tf_data_load = False
         input_tensors = None
 
-    model = MAML(dim_input, dim_output, test_num_updates=test_num_updates)
+    model = MAML(dim_input, dim_output, test_num_updates=test_num_updates, dim_state_input=dim_state_input)
     if FLAGS.train or not tf_data_load:
         model.construct_model(input_tensors=input_tensors, prefix='metatrain_')
     if tf_data_load:
@@ -482,9 +510,15 @@ def main():
     model_file = None
 
     saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=10)
-    sess = tf.InteractiveSession()
-    tf.global_variables_initializer().run()
-    tf.train.start_queue_runners()
+    print('Done constructing graph. Initializating session and variables.')
+    if FLAGS.baseline == 'oracle':
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
+    else:
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
+    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+    with sess.as_default():
+        tf.global_variables_initializer().run()
+        tf.train.start_queue_runners()
 
     if FLAGS.resume or not FLAGS.train:
         model_file = tf.train.latest_checkpoint(FLAGS.logdir + '/' + exp_string)

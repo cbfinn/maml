@@ -1,7 +1,10 @@
 """ Code for loading data. """
+import imageio
+import glob
 import numpy as np
 import os
 import random
+import pickle
 import tensorflow as tf
 
 from skimage import transform
@@ -27,6 +30,7 @@ class DataGenerator(object):
         self.batch_size = batch_size
         self.num_samples_per_task = num_samples_per_task
         self.num_classes = 1  # by default 1 (only relevant for classification problems)
+        self.dim_state_input = None
 
         if FLAGS.datasource == 'sinusoid':
             self.generate = self.generate_sinusoid_batch
@@ -92,6 +96,23 @@ class DataGenerator(object):
             else:
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
+        elif 'push' in FLAGS.datasource:   
+            # TODO - don't just use images, also use state info
+            assert FLAGS.update_batch_size == 20 # TODO - update batch size of 20?
+            self.img_size = config.get('img_size', 125) 
+            self.dim_input = self.img_size*self.img_size* 3
+            self.dim_state_input = 20
+            self.dim_output = 7 #self.num_classes
+            self.generate = self.generate_cont_push_batch 
+            self.data_folder = '/media/drive3tb/paired_consistent_push_demos/'
+            self.tasks = [int(filename[filename.rfind('/')+1:-4]) for filename in glob.glob(self.data_folder + '*.pkl')]
+            # dataset has 12 batches per task, each batch has 1 demonstration
+            self.cur_task = 19 # current task, indexes into self.task_folders
+            self.cur_task_batch_id = 10  # number of batches for the current task
+            self.num_tasks = 20   # total number of tasks with data so far
+            self.task_data = {}
+            for i in range(self.num_tasks):
+                self.task_data[i] = list(range(self.cur_task_batch_id))
         elif 'rainbow_mnist' in FLAGS.datasource:
             # number of classes should be set to 1 for rainbow_mnist ( but dim output is 10 )
             self.num_classes = 1 
@@ -99,19 +120,36 @@ class DataGenerator(object):
             self.img_size = config.get('img_size', (28, 28))
             self.dim_input = np.prod(self.img_size) * 3
             self.dim_output = 10 #self.num_classes
-            self.generate = self.generate_rainbow_mnist_batch
-            metatrain_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource +'/train')
-            metaval_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource + '/val')
-
-            self.metatrain_task_folders = [os.path.join(metatrain_folder, family) \
-                for family in os.listdir(metatrain_folder) \
-                if os.path.isdir(os.path.join(metatrain_folder, family)) ]
-            random.seed(1)
-            random.shuffle(self.metatrain_task_folders)
-            self.metaval_task_folders = [os.path.join(metaval_folder, family) \
-                for family in os.listdir(metaval_folder) \
-                if os.path.isdir(os.path.join(metaval_folder, family)) ]
             self.rotations = config.get('rotations', [0])
+            if 'cont' in FLAGS.datasource:
+                self.generate = self.generate_cont_rainbow_mnist_batch
+                data_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource +'/')
+                # this will be continually added to, but it will start with 8 folders and 10 batches per folder
+                self.task_folders = [os.path.join(data_folder, task) for task in os.listdir(data_folder)]
+                random.seed(1)
+                random.shuffle(self.task_folders)
+
+                # cur task = 0, num_tasks = 1 for 0
+                # cur task = 19, num_tasks = 20 for 0
+                self.cur_task = 19 # current task, indexes into self.task_folders
+                self.cur_task_batch_id = 10  # number of batches for the current task
+                self.num_tasks = 20   # total number of tasks with data so far
+                self.task_data = {}
+                for i in range(self.num_tasks):
+                    self.task_data[i] = list(range(self.cur_task_batch_id))
+            else:
+                self.generate = self.generate_rainbow_mnist_batch
+                metatrain_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource +'/train')
+                metaval_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource + '/val')
+
+                self.metatrain_task_folders = [os.path.join(metatrain_folder, family) \
+                    for family in os.listdir(metatrain_folder) \
+                    if os.path.isdir(os.path.join(metatrain_folder, family)) ]
+                random.seed(1)
+                random.shuffle(self.metatrain_task_folders)
+                self.metaval_task_folders = [os.path.join(metaval_folder, family) \
+                    for family in os.listdir(metaval_folder) \
+                    if os.path.isdir(os.path.join(metaval_folder, family)) ]
         elif FLAGS.datasource == 'miniimagenet':
             self.num_classes = config.get('num_classes', FLAGS.num_classes)
             self.img_size = config.get('img_size', (84, 84))
@@ -136,6 +174,173 @@ class DataGenerator(object):
             self.rotations = config.get('rotations', [0])
         else:
             raise ValueError('Unrecognized data source')
+
+    def add_task(self):
+        # Performance on current task is satisfactory. Move on to next task.
+        assert 'cont' in FLAGS.datasource
+        self.cur_task += 1
+        if self.cur_task >= self.num_tasks:
+            self.num_tasks += 1
+            self.cur_task_batch_id = 1
+            self.task_data[self.cur_task] = [0]
+        else:
+            self.cur_task_batch_id = 10 
+        print(self.task_data)
+
+    def add_batch(self):
+        # Need to add more data for the current task
+        assert 'cont' in FLAGS.datasource
+        self.task_data[self.cur_task].append(self.cur_task_batch_id)
+        self.cur_task_batch_id += 1
+
+    def generate_cont_push_batch(self, train=True, itr=None):
+        # TODO - support cont_finetune_on_all
+        if train:
+            if FLAGS.train_only_on_cur:
+                tasks = [list(enumerate(self.tasks))[self.cur_task]]
+            else:
+                tasks = list(enumerate(self.tasks))[:self.num_tasks]
+        else:
+            if FLAGS.cont_incl_cur:
+                tasks = [list(enumerate(self.tasks))[self.cur_task]]
+            else:
+                tasks = [list(enumerate(self.tasks))[self.cur_task+1]]
+
+        # if not train and not inner SGD, use more samples per task
+        if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+            eval_samples_per_task = int(self.num_samples_per_task/2)
+            # update batch size * the number of available batches
+            num_train = int(self.num_samples_per_task / 2 * len(self.task_data[self.cur_task]))
+            num_samples_per_task = num_train + eval_samples_per_task
+        else:
+            num_samples_per_task = self.num_samples_per_task
+        inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_input], dtype=np.float32)
+        outputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_output], dtype=np.int32)
+
+
+        num_samples_per_task = self.num_samples_per_task
+        inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_input], dtype=np.float32)
+        state_inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_state_input], dtype=np.float32)
+        outputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_output], dtype=np.float32)
+
+        tasks = [random.choice(tasks) for _ in range(self.batch_size)]
+        for i in range(self.batch_size):
+            task_index, task = tasks[i]
+            available_batches = np.array(self.task_data[task_index]) + 12
+            if not FLAGS.cont_incl_cur:
+                # not fully supported, need to update available_batches
+                import pdb; pdb.set_trace()
+            val_batches = None
+            if not train and FLAGS.baseline != 'oracle':
+                val_batches = available_batches[-1] + 1
+            elif not train and FLAGS.baseline == 'oracle':
+                available_batches = [available_batches[-1] + 1]
+            assert not FLAGS.inner_sgd
+            # first sample one demo 
+            if val_batches is None:
+                demo_inds = np.random.choice(available_batches, size=2, replace=True)
+            else:
+                demo_inds = [np.random.choice(available_batches), np.random.choice(val_batches)]
+            # load pickle file
+            with open(self.data_folder + str(task) + '.pkl', 'rb') as pkl_file:
+                pkl = pickle.load(pkl_file)
+                actions = pkl['demoU']
+                states = pkl['demoX']
+            #if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+            if FLAGS.cont_finetune_on_all:
+                import pdb; pdb.set_trace()  # not yet supported, need to write code for this
+            timesteps0 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
+            timesteps1 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
+            # select actions from pickle file
+            actions = np.concatenate([actions[demo_inds[0], timesteps0, :], actions[demo_inds[1], timesteps1, :]], 0)
+            outputs[i] = actions
+            states = np.concatenate([states[demo_inds[0], timesteps0, :], states[demo_inds[1], timesteps1, :]], 0)
+            state_inputs[i] = states
+            # load images
+            images0 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[0])+'.samp0.gif'))
+            images1 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[1])+'.samp0.gif'))
+            images = np.concatenate([images0[timesteps0, :, :, :3],  images1[timesteps1, :, :, :3]], 0)
+            inputs[i] = images.reshape([num_samples_per_task, -1])
+
+        return inputs, outputs, state_inputs, None
+
+
+
+
+    def generate_cont_rainbow_mnist_batch(self, train=True, itr=None):  # RGB images
+
+        if train:
+            # Use all tasks so far
+            if FLAGS.train_only_on_cur:
+                task_folders = [list(enumerate(self.task_folders))[self.cur_task]]
+            else:
+                task_folders = list(enumerate(self.task_folders))[:self.num_tasks]
+        else:
+            # Only use the next task # current task
+            # cont_incl_cur: whether or not to meta-train on the current task
+            if FLAGS.cont_incl_cur:
+                task_folders = [list(enumerate(self.task_folders))[self.cur_task]]
+            else:
+                task_folders = [list(enumerate(self.task_folders))[self.cur_task+1]]
+                task_folders[0] = (task_folders[0][0] - 1, task_folders[0][1])
+
+        # if not train and not inner SGD, use more samples per task
+        if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+            eval_samples_per_task = int(self.num_samples_per_task/2)
+            task_index, tfolder = task_folders[0]
+            available_batches = self.task_data[task_index]
+            image_filepaths = [os.path.join(tfolder, str(batch), family, img_name) \
+                for batch in available_batches \
+                for family in os.listdir(os.path.join(tfolder, str(batch))) \
+                for img_name in os.listdir(os.path.join(tfolder, str(batch), family))]
+            num_train = len(image_filepaths)
+            num_samples_per_task = num_train + eval_samples_per_task
+        else:
+            num_samples_per_task = self.num_samples_per_task
+        inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_input], dtype=np.float32)
+        outputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_output], dtype=np.int32)
+
+        # sample tasks
+        task_folders = [random.choice(task_folders) for _ in range(self.batch_size)]
+
+        for i in range(self.batch_size):
+            task_index, tfolder = task_folders[i]
+            available_batches = self.task_data[task_index]
+            # use self.task_data[task_index]  to figure out which folders can be used
+            image_filepaths = [os.path.join(tfolder, str(batch), family, img_name) \
+                for batch in available_batches \
+                for family in os.listdir(os.path.join(tfolder, str(batch))) \
+                for img_name in os.listdir(os.path.join(tfolder, str(batch), family))]
+            val_image_filepaths = None
+            if not train and FLAGS.baseline != 'oracle':
+                batch = available_batches[-1] + 1
+                val_image_filepaths = [os.path.join(tfolder, str(batch), family, img_name)
+                    for family in os.listdir(os.path.join(tfolder, str(batch))) \
+                    for img_name in os.listdir(os.path.join(tfolder, str(batch), family))]
+            elif not train and FLAGS.baseline == 'oracle':
+                batch = available_batches[-1] + 1
+                image_filepaths = [os.path.join(tfolder, str(batch), family, img_name)
+                    for family in os.listdir(os.path.join(tfolder, str(batch))) \
+                    for img_name in os.listdir(os.path.join(tfolder, str(batch), family))]
+            assert not FLAGS.shuffle_tasks 
+            assert not FLAGS.inner_sgd # not currently supported
+
+            # sample num_samples_per_task images, num_samples_per_task should be <= 5
+            if val_image_filepaths is not None:
+                assert not FLAGS.inner_sgd # not supported
+                sampled_filepaths = np.random.choice(image_filepaths, size=num_samples_per_task-int(self.num_samples_per_task/2), replace=False)
+                second_filepaths = np.random.choice(val_image_filepaths, size=int(self.num_samples_per_task/2), replace=False)
+                sampled_filepaths = np.concatenate([sampled_filepaths, second_filepaths])
+            else:
+                sampled_filepaths = np.random.choice(image_filepaths, size=num_samples_per_task, replace=False)
+            images = [np.reshape(np.array(load_transform_color(filename, size=self.img_size)), (-1)) for filename in sampled_filepaths]
+            inputs[i] = np.array(images)
+
+            # extract label, convert to one-hot
+            scalar_labels = [int(sampled_filepaths[i][sampled_filepaths[i].rfind('/')-1]) for i in range(num_samples_per_task)]
+            outputs[i, np.arange(num_samples_per_task), scalar_labels] = 1.0
+        return inputs, outputs, None, None
+
 
 
     def make_data_tensor(self, train=True):
@@ -337,6 +542,7 @@ class DataGenerator(object):
             inputs[i] = tformed
             outputs[i] = task_labels
         return inputs, outputs, None, None
+
 
     def generate_rainbow_mnist_batch(self, train=True, itr=None):  # RGB images
 

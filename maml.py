@@ -4,15 +4,16 @@ import numpy as np
 import tensorflow as tf
 
 from tensorflow.python.platform import flags
-from utils import mse, xent, conv_block, normalize, sigmoid_xent
+from utils import mse, xent, conv_block, normalize, sigmoid_xent, safe_get, init_conv_weights_xavier, init_bias, init_weights
 
 FLAGS = flags.FLAGS
 
 class MAML:
-    def __init__(self, dim_input=1, dim_output=1, test_num_updates=5):
+    def __init__(self, dim_input=1, dim_output=1, test_num_updates=5, dim_state_input=None):
         """ must call construct_model() after initializing MAML! """
         self.dim_input = dim_input
         self.dim_output = dim_output
+        self.dim_state_input = dim_state_input
         self.update_lr = FLAGS.update_lr
         self.meta_lr = tf.placeholder_with_default(FLAGS.meta_lr, ())
         self.classification = False
@@ -23,6 +24,15 @@ class MAML:
             self.loss_func = mse
             self.forward = self.forward_fc
             self.construct_weights = self.construct_fc_weights
+        elif 'push' in FLAGS.datasource:
+            # loss func and model
+            def mod_loss(x, y, **kwargs):
+                return mse(x, y, multiplier=50, **kwargs)
+            self.loss_func = mod_loss #lambda x, y, **kwargs: mse(x, y, multiplier=50.0)
+            self.forward = self.forward_fp
+            self.construct_weights = self.construct_fp_weights
+            self.channels = 3
+
         elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist']:
             if 'siamese' in FLAGS.datasource:
                 self.loss_func = sigmoid_xent
@@ -67,6 +77,8 @@ class MAML:
         if input_tensors is None:
             self.inputa = tf.placeholder(tf.float32)
             self.inputb = tf.placeholder(tf.float32)
+            self.statea = tf.placeholder(tf.float32)
+            self.stateb = tf.placeholder(tf.float32)
             self.labela = tf.placeholder(tf.float32)
             self.labelb = tf.placeholder(tf.float32)
         else:
@@ -76,11 +88,12 @@ class MAML:
             self.labelb = input_tensors['labelb']
 
         # selfs are placeholders, nonselfs will be overwritten
-        inputa, inputb, labela, labelb = self.inputa, self.inputb, self.labela, self.labelb
+        inputa, inputb, labela, labelb, statea, stateb = self.inputa, self.inputb, self.labela, self.labelb, self.statea, self.stateb
 
         if FLAGS.test_on_train:
             inputa = inputb
             labela = labelb
+            statea = stateb
         if FLAGS.baseline == 'contextual':
             # TODO - why is this not working?
             assert not FLAGS.test_on_train
@@ -129,7 +142,10 @@ class MAML:
 
             def task_metalearn(inp, reuse=True):
                 """ Perform gradient descent for one task in the meta-batch. """
-                task_inputa, task_inputb, task_labela, task_labelb = inp
+                if 'push' in FLAGS.datasource:
+                    task_inputa, task_inputb, task_labela, task_labelb, task_statea, task_stateb = inp
+                else:
+                    task_inputa, task_inputb, task_labela, task_labelb = inp
                 task_outputbs, task_lossesb = [], []
                 if self.classification:
                     task_accuraciesb = []
@@ -137,19 +153,24 @@ class MAML:
                 if FLAGS.inner_sgd:
                     c = FLAGS.update_batch_size * FLAGS.num_classes
                     task_inputas = [task_inputa[c*i:c*(i+1), :] for i in range(num_updates)]
+                    task_stateas = [task_statea[c*i:c*(i+1), :] for i in range(num_updates)]
                     task_labelas = [task_labela[c*i:c*(i+1), :] for i in range(num_updates)] 
                 else:
                     task_inputas = [task_inputa]*num_updates
+                    task_stateas = [task_statea]*num_updates
                     task_labelas = [task_labela]*num_updates
 
 
-                task_outputa, _ = self.forward(task_inputas[0], weights, reuse=reuse, ind=0)  # only reuse on the first iter
+                task_outputa, _ = self.forward(task_inputas[0], weights, reuse=reuse, ind=0, state_input=task_stateas[0])  # only reuse on the first iter
                 task_lossa = self.inner_loss_func(task_outputa, task_labelas[0], sine_x=task_inputas[0], postupdate=False, loss_weights=self.loss_weights)
 
                 grads = tf.gradients(task_lossa, list(weights.values()))
                 if FLAGS.stop_grad:
                     grads = [tf.stop_gradient(grad) for grad in grads]
                 gradients = dict(zip(weights.keys(), grads))
+                if 'push' in FLAGS.datasource:
+                    for key in gradients.keys():
+                        gradients[key] = tf.clip_by_value(gradients[key], -10, 10)
                 fast_weights = dict(zip(weights.keys(), [weights[key] - self.update_lr*gradients[key] for key in weights.keys()]))
 
                 if FLAGS.update_bn_only:
@@ -157,17 +178,20 @@ class MAML:
                         if 'scale' not in key and 'offset' not in key:
                             fast_weights[key] = weights[key]
 
-                output, _ = self.forward(task_inputb, fast_weights, reuse=True)
+                output, _ = self.forward(task_inputb, fast_weights, reuse=True, state_input=task_stateb)
                 task_outputbs.append(output)
                 task_lossesb.append(self.loss_func(output, task_labelb, postupdate=True))
 
                 for j in range(num_updates - 1):
-                    output_j, _ = self.forward(task_inputas[j+1], fast_weights, reuse=True, ind=j+1)
+                    output_j, _ = self.forward(task_inputas[j+1], fast_weights, reuse=True, ind=j+1, state_input=task_stateas[j+1])
                     loss = self.inner_loss_func(output_j, task_labelas[j+1], sine_x=task_inputa, postupdate=False, loss_weights=self.loss_weights)
                     grads = tf.gradients(loss, list(fast_weights.values()))
                     if FLAGS.stop_grad:
                         grads = [tf.stop_gradient(grad) for grad in grads]
                     gradients = dict(zip(fast_weights.keys(), grads))
+                    if 'push' in FLAGS.datasource:
+                        for key in gradients.keys():
+                            gradients[key] = tf.clip_by_value(gradients[key], -10, 10)
                     fast_weights = dict(zip(fast_weights.keys(), [fast_weights[key] - self.update_lr*gradients[key] for key in fast_weights.keys()]))
 
                     if FLAGS.update_bn_only:
@@ -175,7 +199,7 @@ class MAML:
                             if 'scale' not in key and 'offset' not in key:
                                 fast_weights[key] = weights[key]
 
-                    output, _ = self.forward(task_inputb, fast_weights, reuse=True)
+                    output, _ = self.forward(task_inputb, fast_weights, reuse=True, state_input=task_stateb)
                     task_outputbs.append(output)
                     task_lossesb.append(self.loss_func(output, task_labelb, postupdate=True))
 
@@ -200,13 +224,19 @@ class MAML:
 
             if FLAGS.norm is not 'None':
                 # to initialize the batch norm vars, might want to combine this, and not run idx 0 twice.
-                unused = task_metalearn((inputa[0], inputb[0], labela[0], labelb[0]), False)
+                if 'push' in FLAGS.datasource:
+                    unused = task_metalearn((inputa[0], inputb[0], labela[0], labelb[0], statea[0], stateb[0]), False)
+                else:
+                    unused = task_metalearn((inputa[0], inputb[0], labela[0], labelb[0]), False)
 
             out_dtype = [tf.float32, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates]
             if self.classification:
                 out_dtype.extend([tf.float32, [tf.float32]*num_updates])
             #out_dtype.append(tf.float32)
-            result = tf.map_fn(task_metalearn, elems=(inputa, inputb, labela, labelb), dtype=out_dtype, parallel_iterations=FLAGS.meta_batch_size)
+            if 'push' in FLAGS.datasource:
+                result = tf.map_fn(task_metalearn, elems=(inputa, inputb, labela, labelb, statea, stateb), dtype=out_dtype, parallel_iterations=FLAGS.meta_batch_size)
+            else:
+                result = tf.map_fn(task_metalearn, elems=(inputa, inputb, labela, labelb), dtype=out_dtype, parallel_iterations=FLAGS.meta_batch_size)
             if self.classification:
                 outputas, outputbs, lossesa, lossesb, accuraciesa, accuraciesb = result
             else:
@@ -234,7 +264,7 @@ class MAML:
                     var_list = [var for var in tf.trainable_variables() if 'loss' in var.name]
                 if FLAGS.zerok_shot:
                     if FLAGS.inner_sgd:
-                        meta_objective = sum(self.total_losses2[:FLAGS.num_updates]) + self.total_loss1
+                        meta_objective = sum(self.total_losses2[:FLAGS.num_updates]) #+ self.total_loss1
                     else:
                         meta_objective = self.total_losses2[FLAGS.num_updates-1] + self.total_loss1
                 else:
@@ -271,9 +301,10 @@ class MAML:
 
     def learned_loss(self, pred, label=None, **kwargs):
         # Label is unused, to match the signature of other losses.
+        #pred = tf.nn.softmax(pred)
         if FLAGS.label_in_loss:
-            #pred = tf.concat([pred,label], -1)
-            pred = tf.nn.softmax(pred) - label
+            pred = tf.concat([pred,label], -1)
+            #pred = tf.nn.softmax(pred) - label
         fc_init =  tf.contrib.layers.xavier_initializer(dtype=tf.float32)   
         if 'loss_weights' not in dir(self) or self.loss_weights is None:
             hidden_dim = 40
@@ -342,6 +373,86 @@ class MAML:
             else:
                 hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.nn.relu, reuse=reuse, scope=str(i+1))
         return tf.matmul(hidden, weights['w'+str(len(self.dim_hidden)+1)]) + weights['b'+str(len(self.dim_hidden)+1)]
+
+    def construct_fp_weights(self):
+        weights = {}
+        self.num_filters = 16
+        self.n_conv_layers = 4
+        self.strides = [[1, 2, 2, 1]]*self.n_conv_layers
+        self.filter_sizes = [5]*self.n_conv_layers
+        self.img_size = 125
+        downsample_factor = 1
+        self.conv_out_size = int(self.num_filters*2)
+
+        # conv weights
+        fan_in = self.channels
+        for i in range(self.n_conv_layers):
+            weights['wc%d' % (i+1)] = init_conv_weights_xavier([self.filter_sizes[i], self.filter_sizes[i], fan_in, self.num_filters], name='wc%d' % (i+1)) # 5x5 conv, 1 input, 32 outputs
+            weights['bc%d' % (i+1)] = init_bias([self.num_filters], name='bc%d' % (i+1))
+            fan_in = self.num_filters
+
+        # fc weights
+        in_shape = self.conv_out_size
+        # if you have state
+        in_shape += self.dim_state_input
+        self.bt_dim = 20
+        in_shape += self.bt_dim
+        self.conv_out_size_final = in_shape
+        weights['context'] = safe_get('context', initializer=tf.zeros([self.bt_dim], dtype=tf.float32))
+
+        self.n_layers = 3
+        dim_hidden = [200]*(self.n_layers-1)
+        dim_hidden.append(self.dim_output)
+        for i in range(self.n_layers):
+            weights['w_%d' % i] = init_weights([in_shape, dim_hidden[i]], name='w_%d' % i)
+            weights['b_%d' % i] = init_bias([dim_hidden[i]], name='b_%d' % i)
+            in_shape = dim_hidden[i]
+
+        return weights
+
+    def forward_fp(self, inp, weights, reuse=False, scope='', ind=None, state_input=None):
+        # hacky way to tile the context variable without knowing the number of examples
+        flatten_image = tf.reshape(inp, [-1, self.img_size*self.img_size*self.channels])
+        context = tf.transpose(tf.gather(tf.transpose(tf.zeros_like(flatten_image)), list(range(20))))
+        context += weights['context']
+
+        inp = tf.reshape(inp, [-1, self.img_size, self.img_size, self.channels])
+
+
+        conv_layer = inp 
+        for i in range(self.n_conv_layers):
+            conv_layer = conv_block(conv_layer, weights['wc%d' % (i+1)], weights['bc%d' % (i+1)], reuse=reuse, scope=str(i))
+        _, num_rows, num_cols, num_fp = conv_layer.get_shape()
+        num_rows, num_cols, num_fp = [int(x) for x in [num_rows, num_cols, num_fp]]
+
+        x_map = np.empty([num_rows, num_cols], np.float32)
+        y_map = np.empty([num_rows, num_cols], np.float32)
+        for i in range(num_rows):
+            for j in range(num_cols):
+                x_map[i, j] = (i - num_rows / 2.0) / num_rows
+                y_map[i, j] = (j - num_cols / 2.0) / num_cols
+        x_map = tf.convert_to_tensor(x_map)
+        y_map = tf.convert_to_tensor(y_map)
+        x_map = tf.reshape(x_map, [num_rows * num_cols])
+        y_map = tf.reshape(y_map, [num_rows * num_cols])
+        features = tf.reshape(tf.transpose(conv_layer, [0,3,1,2]),
+                                  [-1, num_rows*num_cols])
+        softmax = tf.nn.softmax(features)
+        fp_x = tf.reduce_sum(tf.multiply(x_map, softmax), [1], keep_dims=True)
+        fp_y = tf.reduce_sum(tf.multiply(y_map, softmax), [1], keep_dims=True)
+        conv_out_flat = tf.reshape(tf.concat(axis=1, values=[fp_x, fp_y]), [-1, num_fp*2])
+        fc_input = tf.add(conv_out_flat, 0)
+        fc_input = tf.concat(axis=1, values=[fc_input, context])
+        fc_output = fc_input
+        # for state input
+        fc_output = tf.concat(axis=1, values=[fc_output, state_input])
+        for i in range(self.n_layers):
+            fc_output = tf.matmul(fc_output, weights['w_%d' % i]) + weights['b_%d' % i]
+            if i != self.n_layers - 1:
+                fc_output = tf.nn.relu(fc_output)
+        return fc_output, None
+
+
 
     def construct_conv_weights(self):
         weights = {}
