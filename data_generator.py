@@ -97,14 +97,13 @@ class DataGenerator(object):
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
         elif 'push' in FLAGS.datasource:   
-            # TODO - don't just use images, also use state info
             assert FLAGS.update_batch_size == 20 # TODO - update batch size of 20?
             self.img_size = config.get('img_size', 125) 
             self.dim_input = self.img_size*self.img_size* 3
             self.dim_state_input = 20
             self.dim_output = 7 #self.num_classes
             self.generate = self.generate_cont_push_batch 
-            self.data_folder = '/media/drive3tb/paired_consistent_push_demos/'
+            self.data_folder = '/media/4tb/cfinn/paired_consistent_push_demos/'
             self.tasks = [int(filename[filename.rfind('/')+1:-4]) for filename in glob.glob(self.data_folder + '*.pkl')]
             # dataset has 12 batches per task, each batch has 1 demonstration
             self.cur_task = 19 # current task, indexes into self.task_folders
@@ -214,11 +213,7 @@ class DataGenerator(object):
             num_samples_per_task = num_train + eval_samples_per_task
         else:
             num_samples_per_task = self.num_samples_per_task
-        inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_input], dtype=np.float32)
-        outputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_output], dtype=np.int32)
 
-
-        num_samples_per_task = self.num_samples_per_task
         inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_input], dtype=np.float32)
         state_inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_state_input], dtype=np.float32)
         outputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_output], dtype=np.float32)
@@ -239,6 +234,8 @@ class DataGenerator(object):
             # first sample one demo 
             if val_batches is None:
                 demo_inds = np.random.choice(available_batches, size=2, replace=True)
+            elif val_batches is not None and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+                val_ind = np.random.choice(val_batches)
             else:
                 demo_inds = [np.random.choice(available_batches), np.random.choice(val_batches)]
             # load pickle file
@@ -246,20 +243,33 @@ class DataGenerator(object):
                 pkl = pickle.load(pkl_file)
                 actions = pkl['demoU']
                 states = pkl['demoX']
-            #if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
-            if FLAGS.cont_finetune_on_all:
-                import pdb; pdb.set_trace()  # not yet supported, need to write code for this
-            timesteps0 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
-            timesteps1 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
-            # select actions from pickle file
-            actions = np.concatenate([actions[demo_inds[0], timesteps0, :], actions[demo_inds[1], timesteps1, :]], 0)
+            if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+                all_actions = []
+                all_states = []
+                all_images = []
+                for demo_batch in available_batches:
+                    timesteps = np.random.choice(np.arange(100), size=int(self.num_samples_per_task/2), replace=False)
+                    all_actions.append(actions[demo_batch, timesteps, :])
+                    all_states.append(states[demo_batch, timesteps, :])
+                    all_images.append(np.array(imageio.mimread(self.data_folder + 'object_' + str(task) + '/cond' + str(demo_batch) + '.samp0.gif'))[timesteps, :, :, :3])
+                timesteps = np.random.choice(np.arange(100), size=int(self.num_samples_per_task/2), replace=False)
+                all_actions.append(actions[val_ind, timesteps, :])
+                all_states.append(states[val_ind, timesteps, :])
+                all_images.append(np.array(imageio.mimread(self.data_folder + 'object_' + str(task) + '/cond' + str(val_ind) + '.samp0.gif'))[timesteps, :, :, :3])
+                actions = np.concatenate(all_actions, 0)
+                states = np.concatenate(all_states, 0)
+                images = np.concatenate(all_images, 0)
+            else:
+                timesteps0 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
+                timesteps1 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
+                # select actions from pickle file
+                actions = np.concatenate([actions[demo_inds[0], timesteps0, :], actions[demo_inds[1], timesteps1, :]], 0)
+                states = np.concatenate([states[demo_inds[0], timesteps0, :], states[demo_inds[1], timesteps1, :]], 0)
+                images0 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[0])+'.samp0.gif'))
+                images1 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[1])+'.samp0.gif'))
+                images = np.concatenate([images0[timesteps0, :, :, :3],  images1[timesteps1, :, :, :3]], 0)
             outputs[i] = actions
-            states = np.concatenate([states[demo_inds[0], timesteps0, :], states[demo_inds[1], timesteps1, :]], 0)
             state_inputs[i] = states
-            # load images
-            images0 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[0])+'.samp0.gif'))
-            images1 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[1])+'.samp0.gif'))
-            images = np.concatenate([images0[timesteps0, :, :, :3],  images1[timesteps1, :, :, :3]], 0)
             inputs[i] = images.reshape([num_samples_per_task, -1])
 
         return inputs, outputs, state_inputs, None

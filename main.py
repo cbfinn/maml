@@ -131,13 +131,14 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         # **SLOW is % 2k, % 50
         # **EXTRASLOW is % 4k, % 100
         TASK_ITER = 2000
-        BATCH_ITER = 50
+        BATCH_ITER = 200
         # initialize continual learning at this iteration
-        INIT_CONT = TASK_ITER / 2
-        if itr >= TASK_ITER / 2 and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
+        INIT_CONT = 2000 #TASK_ITER / 2
+        if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
             if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
                 data_generator.add_task()
-                #tf.global_variables_initializer().run()
+                if FLAGS.train_only_on_cur:
+                    sess.run(tf.global_variables_initializer())  # needed for independent, also needed in other scenarios
             elif itr % BATCH_ITER == 0:
                 data_generator.add_batch()
         feed_dict = {}
@@ -392,7 +393,7 @@ def main():
 
     dim_output = data_generator.dim_output
     if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline == 'incl_task':
-        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource
+        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource or 'push' in FLAGS.datasource
         if FLAGS.datasource == 'sinusoid':
             dim_input = 3
         else:
@@ -522,7 +523,8 @@ def main():
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
     else:
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
-    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+    #sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+    sess = tf.Session()
     with sess.as_default():
         tf.global_variables_initializer().run()
         tf.train.start_queue_runners()
