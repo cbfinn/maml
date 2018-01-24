@@ -527,14 +527,8 @@ def main():
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
         sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     else:
-<<<<<<< HEAD
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
-    #sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
-    sess = tf.Session()
-=======
         #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
         sess = tf.Session()
->>>>>>> ffe2c651d3888b56096a1360f21cbb9e1c446aca
     with sess.as_default():
         tf.global_variables_initializer().run()
         tf.train.start_queue_runners()
