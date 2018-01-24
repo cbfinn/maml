@@ -144,12 +144,16 @@ def load_transform_color(image_path, angle=0., s=(0, 0), size=(20, 20)):
     assert np.max(original) > 1.
     original /= 255.
 
-    rotated = np.maximum(np.minimum(rotate(original, angle=angle, cval=1.), 1.), 0.)
-    s = (s[0], s[1], 0)
-    shifted = shift(rotated, shift=s)
-    resized = imresize(shifted, size=size, interp='lanczos')
+    if angle != 0.:
+        original = rotate(original, angle=angle, cval=1.)
+    rotated = np.maximum(np.minimum(original, 1.), 0.)
+    if s[0] != 0 or s[1] != 0:
+        s = (s[0], s[1], 0)
+        rotated = shift(rotated, shift=s)
+    if original.shape[:2] != size:
+        rotated = imresize(rotated, size=size, interp='lanczos')
 
-    return resized
+    return rotated
 
 
 

@@ -136,6 +136,7 @@ class DataGenerator(object):
                 self.task_data = {}
                 for i in range(self.num_tasks):
                     self.task_data[i] = list(range(self.cur_task_batch_id))
+                self.load_rainbow_mnist()
             else:
                 self.generate = self.generate_rainbow_mnist_batch
                 metatrain_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource +'/train')
@@ -174,6 +175,18 @@ class DataGenerator(object):
         else:
             raise ValueError('Unrecognized data source')
 
+    def load_rainbow_mnist(self):
+        print('Loading images into RAM')
+        self.images = {}
+        for tfolder in self.task_folders:
+           image_filepaths = [os.path.join(tfolder, batch, family, img_name) \
+                for batch in os.listdir(tfolder) \
+                for family in os.listdir(os.path.join(tfolder, str(batch))) \
+                for img_name in os.listdir(os.path.join(tfolder, str(batch), family))]
+           for filepath in image_filepaths:
+               self.images[filepath] = load_transform_color(filepath, size=self.img_size)
+        print('Done loading images')
+  
     def add_task(self):
         # Performance on current task is satisfactory. Move on to next task.
         assert 'cont' in FLAGS.datasource
@@ -343,7 +356,8 @@ class DataGenerator(object):
                 sampled_filepaths = np.concatenate([sampled_filepaths, second_filepaths])
             else:
                 sampled_filepaths = np.random.choice(image_filepaths, size=num_samples_per_task, replace=False)
-            images = [np.reshape(np.array(load_transform_color(filename, size=self.img_size)), (-1)) for filename in sampled_filepaths]
+            #images = [np.reshape(np.array(load_transform_color(filename, size=self.img_size)), (-1)) for filename in sampled_filepaths]
+            images = [np.reshape(np.array(self.images[filename]), (-1)) for filename in sampled_filepaths]
             inputs[i] = np.array(images)
 
             # extract label, convert to one-hot

@@ -130,10 +130,14 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         # **NORMAL is % 1k, % 25
         # **SLOW is % 2k, % 50
         # **EXTRASLOW is % 4k, % 100
+        # pushing is 2000, 200
         TASK_ITER = 2000
         BATCH_ITER = 200
         # initialize continual learning at this iteration
-        INIT_CONT = 2000 #TASK_ITER / 2
+        if 'push' in FLAGS.datasource:
+            INIT_CONT = 2000 #TASK_ITER / 2
+        else:
+            INIT_CONT = TASK_ITER / 2
         if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
             if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
                 data_generator.add_task()
@@ -521,10 +525,16 @@ def main():
     print('Done constructing graph. Initializating session and variables.')
     if FLAGS.baseline == 'oracle':
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
+        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     else:
+<<<<<<< HEAD
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
     #sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     sess = tf.Session()
+=======
+        #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
+        sess = tf.Session()
+>>>>>>> ffe2c651d3888b56096a1360f21cbb9e1c446aca
     with sess.as_default():
         tf.global_variables_initializer().run()
         tf.train.start_queue_runners()
