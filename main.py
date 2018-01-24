@@ -134,7 +134,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         BATCH_ITER = 50
         # initialize continual learning at this iteration
         INIT_CONT = TASK_ITER / 2
-        if itr >= TASK_ITER / 2 and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
+        if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
             if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
                 data_generator.add_task()
                 #tf.global_variables_initializer().run()

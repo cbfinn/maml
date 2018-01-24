@@ -97,7 +97,6 @@ class DataGenerator(object):
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
         elif 'push' in FLAGS.datasource:   
-            # TODO - don't just use images, also use state info
             assert FLAGS.update_batch_size == 20 # TODO - update batch size of 20?
             self.img_size = config.get('img_size', 125) 
             self.dim_input = self.img_size*self.img_size* 3
