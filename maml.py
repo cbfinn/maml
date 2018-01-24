@@ -146,6 +146,8 @@ class MAML:
                     task_inputa, task_inputb, task_labela, task_labelb, task_statea, task_stateb = inp
                 else:
                     task_inputa, task_inputb, task_labela, task_labelb = inp
+                    task_stateb = None
+                    task_stateas = [None]*num_updates
                 task_outputbs, task_lossesb = [], []
                 if self.classification:
                     task_accuraciesb = []
@@ -153,12 +155,14 @@ class MAML:
                 if FLAGS.inner_sgd:
                     c = FLAGS.update_batch_size * FLAGS.num_classes
                     task_inputas = [task_inputa[c*i:c*(i+1), :] for i in range(num_updates)]
-                    task_stateas = [task_statea[c*i:c*(i+1), :] for i in range(num_updates)]
                     task_labelas = [task_labela[c*i:c*(i+1), :] for i in range(num_updates)] 
+                    if 'push' in FLAGS.datasource:
+                        task_stateas = [task_statea[c*i:c*(i+1), :] for i in range(num_updates)]
                 else:
                     task_inputas = [task_inputa]*num_updates
-                    task_stateas = [task_statea]*num_updates
                     task_labelas = [task_labela]*num_updates
+                    if 'push' in FLAGS.datasource:
+                        task_stateas = [task_statea]*num_updates
 
 
                 task_outputa, _ = self.forward(task_inputas[0], weights, reuse=reuse, ind=0, state_input=task_stateas[0])  # only reuse on the first iter
@@ -498,7 +502,7 @@ class MAML:
             weights['b5'] = tf.Variable(tf.zeros([self.dim_output]), name='b5')
         return weights
 
-    def forward_conv(self, inp, weights, reuse=False, scope='', ind=None):
+    def forward_conv(self, inp, weights, reuse=False, scope='', ind=None, **kwargs):
         # reuse is for the normalization parameters.
         if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource:
             channels = 3 # TODO - don't hardcode.

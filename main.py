@@ -520,9 +520,10 @@ def main():
     print('Done constructing graph. Initializating session and variables.')
     if FLAGS.baseline == 'oracle':
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
+        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     else:
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
-    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+        #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
+        sess = tf.Session()
     with sess.as_default():
         tf.global_variables_initializer().run()
         tf.train.start_queue_runners()
