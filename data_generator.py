@@ -112,6 +112,7 @@ class DataGenerator(object):
             self.task_data = {}
             for i in range(self.num_tasks):
                 self.task_data[i] = list(range(self.cur_task_batch_id))
+            self.load_pushing()
         elif 'rainbow_mnist' in FLAGS.datasource:
             # number of classes should be set to 1 for rainbow_mnist ( but dim output is 10 )
             self.num_classes = 1 
@@ -175,6 +176,20 @@ class DataGenerator(object):
         else:
             raise ValueError('Unrecognized data source')
 
+    def load_pushing(self):
+        print('Loading data into RAM')
+        self.images = {}
+        self.pkls = {}
+        # load 100 tasks into memory
+        tasks = list(enumerate(self.tasks))[:100]
+        for task_index, task in tasks:
+            with open(self.data_folder + str(task) + '.pkl', 'rb') as pkl_file:
+                self.pkls[self.data_folder+str(task) + '.pkl'] = pickle.load(pkl_file)
+            for demo in range(12, 24):
+                filename = self.data_folder + 'object_' + str(task) + '/cond' + str(demo) + '.samp0.gif'
+                self.images[filename] = np.array(imageio.mimread(filename))[:, :, :, :3]
+        print('Done loading images')
+
     def load_rainbow_mnist(self):
         print('Loading images into RAM')
         self.images = {}
@@ -206,7 +221,6 @@ class DataGenerator(object):
         self.cur_task_batch_id += 1
 
     def generate_cont_push_batch(self, train=True, itr=None):
-        # TODO - support cont_finetune_on_all
         if train:
             if FLAGS.train_only_on_cur:
                 tasks = [list(enumerate(self.tasks))[self.cur_task]]
@@ -252,10 +266,9 @@ class DataGenerator(object):
             else:
                 demo_inds = [np.random.choice(available_batches), np.random.choice(val_batches)]
             # load pickle file
-            with open(self.data_folder + str(task) + '.pkl', 'rb') as pkl_file:
-                pkl = pickle.load(pkl_file)
-                actions = pkl['demoU']
-                states = pkl['demoX']
+            pkl = self.pkls[self.data_folder + str(task) + '.pkl']
+            actions = pkl['demoU']
+            states = pkl['demoX']
             if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
                 all_actions = []
                 all_states = []
@@ -264,11 +277,11 @@ class DataGenerator(object):
                     timesteps = np.random.choice(np.arange(100), size=int(self.num_samples_per_task/2), replace=False)
                     all_actions.append(actions[demo_batch, timesteps, :])
                     all_states.append(states[demo_batch, timesteps, :])
-                    all_images.append(np.array(imageio.mimread(self.data_folder + 'object_' + str(task) + '/cond' + str(demo_batch) + '.samp0.gif'))[timesteps, :, :, :3])
+                    all_images.append(self.images[self.data_folder + 'object_' + str(task) + '/cond' + str(demo_batch) + '.samp0.gif'][timesteps, :, :, :])
                 timesteps = np.random.choice(np.arange(100), size=int(self.num_samples_per_task/2), replace=False)
                 all_actions.append(actions[val_ind, timesteps, :])
                 all_states.append(states[val_ind, timesteps, :])
-                all_images.append(np.array(imageio.mimread(self.data_folder + 'object_' + str(task) + '/cond' + str(val_ind) + '.samp0.gif'))[timesteps, :, :, :3])
+                all_images.append(self.images[self.data_folder + 'object_' + str(task) + '/cond' + str(val_ind) + '.samp0.gif'][timesteps, :, :, :])
                 actions = np.concatenate(all_actions, 0)
                 states = np.concatenate(all_states, 0)
                 images = np.concatenate(all_images, 0)
@@ -278,9 +291,9 @@ class DataGenerator(object):
                 # select actions from pickle file
                 actions = np.concatenate([actions[demo_inds[0], timesteps0, :], actions[demo_inds[1], timesteps1, :]], 0)
                 states = np.concatenate([states[demo_inds[0], timesteps0, :], states[demo_inds[1], timesteps1, :]], 0)
-                images0 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[0])+'.samp0.gif'))
-                images1 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[1])+'.samp0.gif'))
-                images = np.concatenate([images0[timesteps0, :, :, :3],  images1[timesteps1, :, :, :3]], 0)
+                images0 = self.images[self.data_folder + 'object_' + str(task) + '/cond' + str(demo_inds[0]) + '.samp0.gif']
+                images1 = self.images[self.data_folder + 'object_' + str(task) + '/cond' + str(demo_inds[1]) + '.samp0.gif']
+                images = np.concatenate([images0[timesteps0, :, :, :],  images1[timesteps1, :, :, :]], 0)
             outputs[i] = actions
             state_inputs[i] = states
             inputs[i] = images.reshape([num_samples_per_task, -1])
