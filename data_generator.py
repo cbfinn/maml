@@ -97,7 +97,7 @@ class DataGenerator(object):
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
         elif 'push' in FLAGS.datasource:   
-            assert FLAGS.update_batch_size == 20 # TODO - update batch size of 20?
+            #assert FLAGS.update_batch_size == 20 # TODO - update batch size of 20?
             self.img_size = config.get('img_size', 125) 
             self.dim_input = self.img_size*self.img_size* 3
             self.dim_state_input = 20
@@ -106,9 +106,9 @@ class DataGenerator(object):
             self.data_folder = '/media/4tb/cfinn/paired_consistent_push_demos/'
             self.tasks = [int(filename[filename.rfind('/')+1:-4]) for filename in glob.glob(self.data_folder + '*.pkl')]
             # dataset has 12 batches per task, each batch has 1 demonstration
-            self.cur_task = 19 # current task, indexes into self.task_folders
+            self.cur_task = 99 #49 # current task, indexes into self.task_folders
             self.cur_task_batch_id = 10  # number of batches for the current task
-            self.num_tasks = 20   # total number of tasks with data so far
+            self.num_tasks = 100 #50   # total number of tasks with data so far
             self.task_data = {}
             for i in range(self.num_tasks):
                 self.task_data[i] = list(range(self.cur_task_batch_id))
@@ -181,7 +181,7 @@ class DataGenerator(object):
         self.images = {}
         self.pkls = {}
         # load 100 tasks into memory
-        tasks = list(enumerate(self.tasks))[:100]
+        tasks = list(enumerate(self.tasks))[:150]
         for task_index, task in tasks:
             with open(self.data_folder + str(task) + '.pkl', 'rb') as pkl_file:
                 self.pkls[self.data_folder+str(task) + '.pkl'] = pickle.load(pkl_file)
@@ -254,7 +254,7 @@ class DataGenerator(object):
                 import pdb; pdb.set_trace()
             val_batches = None
             if not train and FLAGS.baseline != 'oracle':
-                val_batches = available_batches[-1] + 1
+                val_batches = [available_batches[-1] + 1]
             elif not train and FLAGS.baseline == 'oracle':
                 available_batches = [available_batches[-1] + 1]
             assert not FLAGS.inner_sgd
@@ -267,8 +267,13 @@ class DataGenerator(object):
                 demo_inds = [np.random.choice(available_batches), np.random.choice(val_batches)]
             # load pickle file
             pkl = self.pkls[self.data_folder + str(task) + '.pkl']
-            actions = pkl['demoU']
             states = pkl['demoX']
+            vel = False
+            if vel:     
+                diff = states[:,1:,:7] - states[:,:-1,:7]
+                actions = np.concatenate([diff, np.expand_dims(states[:,-1,7:14], 1)], 1)
+            else:
+                actions = pkl['demoU']  
             if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
                 all_actions = []
                 all_states = []
