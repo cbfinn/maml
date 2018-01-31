@@ -33,8 +33,8 @@ class MAML:
             self.construct_weights = self.construct_fp_weights
             self.channels = 3
 
-        elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist']:
-            if 'siamese' in FLAGS.datasource:
+        elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist']:
+            if 'siamese' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
                 self.loss_func = sigmoid_xent
             else:
                 self.loss_func = xent
@@ -49,6 +49,8 @@ class MAML:
                 self.construct_weights = self.construct_fc_weights
             if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource:
                 self.channels = 3
+            elif 'cifar' in FLAGS.datasource:
+                self.channels = 6   # 2 images
             elif 'siamese' in FLAGS.datasource:
                 self.channels = 2   # 2 images
             else:
@@ -210,7 +212,7 @@ class MAML:
                 task_output = [task_outputa, task_outputbs, task_lossa, task_lossesb]
 
                 if self.classification:
-                    if 'siamese' not in FLAGS.datasource:
+                    if 'siamese' not in FLAGS.datasource and 'cifar' not in FLAGS.datasource:
                         task_accuracya = tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_outputa), 1), tf.argmax(task_labelas[0], 1))
                         for j in range(num_updates):
                             task_accuraciesb.append(tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_outputbs[j]), 1), tf.argmax(task_labelb, 1)))
@@ -508,6 +510,8 @@ class MAML:
             channels = 3 # TODO - don't hardcode.
         elif 'siamese' in FLAGS.datasource:
             channels = 2
+        elif 'cifar' in FLAGS.datasource:
+            channels = 6
         else:
             channels = 1
         if FLAGS.baseline == 'contextual':
