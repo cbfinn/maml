@@ -133,6 +133,8 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         TASK_ITER = 2000
         BATCH_ITER = 50
         # initialize continual learning at this iteration
+        if 'cifar' in FLAGS.datasource:
+            BATCH_ITER *= 2
         INIT_CONT = TASK_ITER / 2
         if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
             if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
@@ -392,7 +394,7 @@ def main():
 
     dim_output = data_generator.dim_output
     if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline == 'incl_task':
-        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource
+        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource or 'cifar' in FLAGS.datasource
         if FLAGS.datasource == 'sinusoid':
             dim_input = 3
         else:
