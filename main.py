@@ -135,7 +135,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         BATCH_ITER = 200
         # initialize continual learning at this iteration
         if 'push' in FLAGS.datasource:
-            INIT_CONT = 2000 #TASK_ITER / 2
+            INIT_CONT = TASK_ITER #TASK_ITER / 2
         else:
             INIT_CONT = TASK_ITER / 2
         if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
