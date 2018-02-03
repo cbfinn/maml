@@ -132,15 +132,17 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         # **EXTRASLOW is % 4k, % 100
         # pushing is 2000, 200
         TASK_ITER = 2000
-        BATCH_ITER = 200
+        BATCH_ITER = 100
         # initialize continual learning at this iteration
         if 'cifar' in FLAGS.datasource:
             BATCH_ITER *= 2
-        if 'push' in FLAGS.datasource:
+            INIT_CONT = TASK_ITER / 2
+        elif 'push' in FLAGS.datasource:
+            TASK_ITER=2000
+            BATCH_ITER=200
             INIT_CONT = TASK_ITER #TASK_ITER / 2
         else:
             INIT_CONT = TASK_ITER / 2
-        INIT_CONT = TASK_ITER / 2
         if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
             if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
                 data_generator.add_task()

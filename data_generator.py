@@ -60,13 +60,13 @@ class DataGenerator(object):
             random.seed(1)
             random.shuffle(self.task_folders) 
             # dataset has 24 batches per task, each batch has one image
-            self.cur_task = 19 # current task, indexes into self.task_folders
+            self.cur_task = 49 # current task, indexes into self.task_folders
             self.cur_task_batch_id = 10  # number of batches for the current task
-            self.num_tasks = 20   # total number of tasks with data so far
+            self.num_tasks = 50   # total number of tasks with data so far
             self.task_data = defaultdict(list)
             for i in range(self.num_tasks):
                 if i < self.cur_task:
-                    self.task_data[i] = list(range(24*20))
+                    self.task_data[i] = list(range(100)) #24*20))
                 else:
                     self.task_data[i] = list(range(24*(self.cur_task_batch_id+1)))
  
@@ -281,8 +281,8 @@ class DataGenerator(object):
 
         # if not train and not inner SGD, use more samples per task
         if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
-            num_val = (self.num_samples_per_task / 2.) * 3.0/2.0
-            task_index = task_folders[0]
+            num_val = int((self.num_samples_per_task / 2.) * 3.0/2.0)
+            task_index, _ = task_folders[0]
             num_left = len(self.task_data[task_index]) - num_val
             num_train = int(num_left * 2. / 3.)
             num_samples_per_task = num_val + num_train 
@@ -319,23 +319,31 @@ class DataGenerator(object):
             # all different comparison images
             comp_images2 = np.array([self.image_dict[img_class][index] for img_class, index in zip(other_classes, comp_images_idx)])
 
+            image_pairs_same = np.concatenate([ref_images[:int(num_samples_per_task/2)], comp_images1], 3)           
+            image_pairs_diff = np.concatenate([ref_images[int(num_samples_per_task/2):], comp_images2], 3)           
+
             # figure out num_train, num_val
             if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all: 
-                import pdb; pdb.set_trace()
+                nthalf = int(num_train/2)
+                same1 = image_pairs_same[:nthalf]
+                diff1 = image_pairs_diff[:nthalf]
+                same2 = image_pairs_same[nthalf:]
+                diff2 = image_pairs_diff[nthalf:]
+                labels_same1 = np.ones([nthalf, 1])
+                labels_diff1 = np.zeros([nthalf, 1])
+                labels_same2 = np.ones([int(num_val/2), 1])
+                labels_diff2 = np.zeros([int(num_val/2), 1])
+                label_batch = np.concatenate([labels_same1, labels_diff1, labels_same2, labels_diff2], 0)
             else:
-                image_pairs_same = np.concatenate([ref_images[:int(num_samples_per_task/2)], comp_images1], 3)           
                 same1, same2 = np.split(image_pairs_same, 2, 0)
                 labels_same = np.ones([int(num_samples_per_task/4),1])
-                image_pairs_diff = np.concatenate([ref_images[int(num_samples_per_task/2):], comp_images2], 3)           
                 diff1, diff2 = np.split(image_pairs_diff, 2, 0)
                 labels_diff = np.zeros([int(num_samples_per_task/4),1])
+                label_batch = np.concatenate([labels_same, labels_diff, labels_same, labels_diff], 0)
 
             # make pre update and post update consistent
             img_batch = np.concatenate([same1, diff1, same2, diff2], 0)
-            label_batch = np.concatenate([labels_same, labels_diff, labels_same, labels_diff], 0)
 
-            # TODO - don't forget sigmoid cross entropy, validation batches, 6-channel images, etc.
-            
             assert not FLAGS.inner_sgd # not currently supported
 
             inputs[batch_i] = img_batch.reshape([num_samples_per_task, -1])
