@@ -131,6 +131,22 @@ class DataGenerator(object):
             self.task_data = {}
             for i in range(self.num_tasks):
                 self.task_data[i] = list(range(self.cur_task_batch_id))
+        elif 'permuted' in FLAGS.datasource:
+            self.generate = self.generate_cont_rainbow_mnist_batch # same format
+            self.num_classes = 1 
+            self.dim_output = 10 #self.num_classes
+            self.dim_input = 28*28*2
+            data_folder = config.get('data_folder', '/home/cfinn/contpermuted_mnist20/')
+            self.task_folders = [os.path.join(data_folder, task) for task in os.listdir(data_folder)]
+            random.seed(1)
+            random.shuffle(self.task_folders)
+            self.cur_task = 19 # current task, indexes into self.task_folders
+            self.cur_task_batch_id = 10  # number of batches for the current task
+            self.num_tasks = 20   # total number of tasks with data so far
+            self.task_data = {}
+            for i in range(self.num_tasks):
+                self.task_data[i] = list(range(self.cur_task_batch_id))
+            self.load_permuted_mnist()
         elif 'rainbow_mnist' in FLAGS.datasource:
             # number of classes should be set to 1 for rainbow_mnist ( but dim output is 10 )
             self.num_classes = 1 
@@ -207,6 +223,18 @@ class DataGenerator(object):
         for key in self.image_dict.keys():
             self.image_dict[key] = np.array(self.image_dict[key])
         del images
+
+    def load_permuted_mnist(self):
+        print('Loading images into RAM')
+        self.images = {}
+        for tfolder in self.task_folders:
+           image_filepaths = [os.path.join(tfolder, batch, family, img_name) \
+                for batch in os.listdir(tfolder) \
+                for family in os.listdir(os.path.join(tfolder, str(batch))) \
+                for img_name in os.listdir(os.path.join(tfolder, str(batch), family))]
+           for filepath in image_filepaths:
+               self.images[filepath] = np.float32(np.load(filepath)) / 256.
+        print('Done loading images')
 
     def load_rainbow_mnist(self):
         print('Loading images into RAM')
@@ -469,6 +497,9 @@ class DataGenerator(object):
             else:
                 sampled_filepaths = np.random.choice(image_filepaths, size=num_samples_per_task, replace=False)
             #images = [np.reshape(np.array(load_transform_color(filename, size=self.img_size)), (-1)) for filename in sampled_filepaths]
+            if FLAGS.learned_loss and not train:
+                # eval learned loss on same data during testing, to reduce data usage
+                sampled_filepaths = np.concatenate([second_filepaths, second_filepaths])
             images = [np.reshape(np.array(self.images[filename]), (-1)) for filename in sampled_filepaths]
             inputs[i] = np.array(images)
 

@@ -124,14 +124,15 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
     train_examples = FLAGS.num_classes * FLAGS.update_batch_size
     if FLAGS.inner_sgd:
         train_examples *= FLAGS.num_updates
+    adam_vars = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if 'Adam' in v.name]
 
     for itr in range(resume_itr, FLAGS.pretrain_iterations + FLAGS.metatrain_iterations):
         # TODO - modify this for pushing?
         # **NORMAL is % 1k, % 25
         # **SLOW is % 2k, % 50
         # **EXTRASLOW is % 4k, % 100
-        TASK_ITER = 2000
-        BATCH_ITER = 50
+        TASK_ITER = 1000
+        BATCH_ITER = 25
         # initialize continual learning at this iteration
         if 'cifar' in FLAGS.datasource:
             BATCH_ITER *= 2
@@ -139,6 +140,8 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
             if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
                 data_generator.add_task()
+                # NEW reinitialize adam vars
+                #sess.run(tf.variables_initializer(adam_vars)) 
                 #tf.global_variables_initializer().run()
             elif itr % BATCH_ITER == 0:
                 data_generator.add_batch()
@@ -394,7 +397,7 @@ def main():
 
     dim_output = data_generator.dim_output
     if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline == 'incl_task':
-        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource or 'cifar' in FLAGS.datasource
+        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource or 'cont' in FLAGS.datasource
         if FLAGS.datasource == 'sinusoid':
             dim_input = 3
         else:

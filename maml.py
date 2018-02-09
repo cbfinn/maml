@@ -33,18 +33,18 @@ class MAML:
             self.construct_weights = self.construct_fp_weights
             self.channels = 3
 
-        elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist']:
+        elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist'] or 'permuted' in FLAGS.datasource:
             if 'siamese' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
                 self.loss_func = sigmoid_xent
             else:
                 self.loss_func = xent
             self.classification = True
-            if FLAGS.conv:
+            if FLAGS.conv and not 'permuted' in FLAGS.datasource:
                 self.dim_hidden = FLAGS.num_filters
                 self.forward = self.forward_conv
                 self.construct_weights = self.construct_conv_weights
             else:
-                self.dim_hidden = [256, 128, 64, 64]
+                self.dim_hidden = [200, 200] #[256, 128, 64, 64]
                 self.forward=self.forward_fc
                 self.construct_weights = self.construct_fc_weights
             if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource:
@@ -65,7 +65,7 @@ class MAML:
         elif self.inner_loss_func is None:
             self.inner_loss_func = self.loss_func
         if FLAGS.context_var:
-            if FLAGS.conv and self.classification:
+            if FLAGS.conv and self.classification and 'permuted' not in FLAGS.datasource:
                 #context_channels = 3 # TODO - hardcoded
                 #self.context_size = [self.dim_input]
                 self.context_size = [10]
@@ -174,7 +174,7 @@ class MAML:
                 if FLAGS.stop_grad:
                     grads = [tf.stop_gradient(grad) for grad in grads]
                 gradients = dict(zip(weights.keys(), grads))
-                if 'push' in FLAGS.datasource:
+                if 'push' in FLAGS.datasource or FLAGS.learned_loss:
                     for key in gradients.keys():
                         gradients[key] = tf.clip_by_value(gradients[key], -10, 10)
                 fast_weights = dict(zip(weights.keys(), [weights[key] - self.update_lr*gradients[key] for key in weights.keys()]))
@@ -195,7 +195,7 @@ class MAML:
                     if FLAGS.stop_grad:
                         grads = [tf.stop_gradient(grad) for grad in grads]
                     gradients = dict(zip(fast_weights.keys(), grads))
-                    if 'push' in FLAGS.datasource:
+                    if 'push' in FLAGS.datasource or FLAGS.learned_loss:
                         for key in gradients.keys():
                             gradients[key] = tf.clip_by_value(gradients[key], -10, 10)
                     fast_weights = dict(zip(fast_weights.keys(), [fast_weights[key] - self.update_lr*gradients[key] for key in fast_weights.keys()]))
@@ -366,7 +366,7 @@ class MAML:
         weights['b'+str(len(self.dim_hidden)+1)] = tf.Variable(tf.zeros([self.dim_output]))
         return weights
 
-    def forward_fc(self, inp, weights, reuse=False):
+    def forward_fc(self, inp, weights, reuse=False, **kwargs):
         if FLAGS.update_bn or FLAGS.update_bn_only:
             raise NotImplementedError('update bn not yet supported for fc net')
         if FLAGS.context_var:
@@ -378,7 +378,7 @@ class MAML:
                 hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.identity, reuse=reuse, scope=str(i+1))
             else:
                 hidden = normalize(tf.matmul(hidden, weights['w'+str(i+1)]) + weights['b'+str(i+1)], activation=tf.nn.relu, reuse=reuse, scope=str(i+1))
-        return tf.matmul(hidden, weights['w'+str(len(self.dim_hidden)+1)]) + weights['b'+str(len(self.dim_hidden)+1)]
+        return tf.matmul(hidden, weights['w'+str(len(self.dim_hidden)+1)]) + weights['b'+str(len(self.dim_hidden)+1)], None
 
     def construct_fp_weights(self):
         weights = {}
