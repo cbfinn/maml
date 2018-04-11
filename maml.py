@@ -104,7 +104,7 @@ class MAML:
                 task_outputas = []
 
                 if FLAGS.inner_sgd:
-                    c = self.dim_output * FLAGS.update_batch_size  # (num classes)
+                    c = self.dim_output * FLAGS.update_batch_size  # (*num classes)
                     inputas = [inputa[c*i:c*(i+1), :] for i in range(num_updates)]
                     labelas = [labela[c*i:c*(i+1), :] for i in range(num_updates)]
                 else:
@@ -261,9 +261,9 @@ class MAML:
             if self.classification:
                 tf.summary.scalar(prefix+'Post-update accuracy, step ' + str(j+1), total_accuracies2[j])
 
-    def learned_loss(self, pred, label=None):
+    def learned_loss(self, pred, label=None, **kwargs):
         # Label is unused, to match the signature of other losses.
-        fc_init =  tf.contrib.layers.xavier_initializer(dtype=dtype)
+        fc_init =  tf.contrib.layers.xavier_initializer(dtype=tf.float32)
         if 'loss_weights' not in dir(self):
             self.loss_weights = {}
             self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, 1]))
