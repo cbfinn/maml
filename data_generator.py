@@ -31,7 +31,7 @@ class DataGenerator(object):
         self.batch_size = batch_size
         self.num_samples_per_task = num_samples_per_task
         self.num_classes = 1  # by default 1 (only relevant for classification problems)
-        self.dim_state_input = None
+        self.dim_state_input = 0 #None
 
         if FLAGS.datasource == 'sinusoid':
             self.generate = self.generate_sinusoid_batch
@@ -153,28 +153,36 @@ class DataGenerator(object):
             self.data_folder = '/media/drive3tb/paired_consistent_push_demos/'
             self.tasks = [int(filename[filename.rfind('/')+1:-4]) for filename in glob.glob(self.data_folder + '*.pkl')]
             # dataset has 12 batches per task, each batch has 1 demonstration
-            self.cur_task = 19 # current task, indexes into self.task_folders
+            self.cur_task = 99 #49 # current task, indexes into self.task_folders
             self.cur_task_batch_id = 10  # number of batches for the current task
-            self.num_tasks = 20   # total number of tasks with data so far
+            self.num_tasks = 100 #50   # total number of tasks with data so far
             self.task_data = {}
             for i in range(self.num_tasks):
                 self.task_data[i] = list(range(self.cur_task_batch_id))
-        elif 'permuted' in FLAGS.datasource:
-            self.generate = self.generate_cont_rainbow_mnist_batch # same format
+            self.load_pushing()
+        elif 'pascal' in FLAGS.datasource:
             self.num_classes = 1
-            self.dim_output = 10 #self.num_classes
-            self.dim_input = 28*28*2
-            data_folder = config.get('data_folder', '/home/cfinn/contpermuted_mnist20/')
+            self.img_size = config.get('img_size', (125, 125))
+            self.dim_input = np.prod(self.img_size) * 3
+            self.dim_output = 4 #self.num_classes
+            self.rotations = config.get('rotations', [0])
+            self.generate = self.generate_cont_pascal_batch
+            data_folder = config.get('data_folder', '/home/cfinn/fixedtexture_norb_pascal1000')
             self.task_folders = [os.path.join(data_folder, task) for task in os.listdir(data_folder)]
             random.seed(1)
             random.shuffle(self.task_folders)
             self.cur_task = 19 # current task, indexes into self.task_folders
-            self.cur_task_batch_id = 10  # number of batches for the current task
+            self.cur_task_batch_id = 0  # number of batches for the current task
             self.num_tasks = 20   # total number of tasks with data so far
-            self.task_data = {}
+            self.task_data = defaultdict(list)
             for i in range(self.num_tasks):
-                self.task_data[i] = list(range(self.cur_task_batch_id))
-            self.load_permuted_mnist()
+                if i < self.cur_task:
+                    self.task_data[i] = list(range(1000)) #24*20))
+                else:
+                    self.task_data[i] = list(range(20))
+                    #self.task_data[i] = list(range(500))
+            self.load_pascal()
+
         elif 'rainbow_mnist' in FLAGS.datasource:
             # number of classes should be set to 1 for rainbow_mnist ( but dim output is 10 )
             self.num_classes = 1
@@ -238,6 +246,20 @@ class DataGenerator(object):
         else:
             raise ValueError('Unrecognized data source')
 
+    def load_pushing(self):
+        print('Loading data into RAM')
+        self.images = {}
+        self.pkls = {}
+        # load 100 tasks into memory
+        tasks = list(enumerate(self.tasks))[:150]
+        for task_index, task in tasks:
+            with open(self.data_folder + str(task) + '.pkl', 'rb') as pkl_file:
+                self.pkls[self.data_folder+str(task) + '.pkl'] = pickle.load(pkl_file)
+            for demo in range(12, 24):
+                filename = self.data_folder + 'object_' + str(task) + '/cond' + str(demo) + '.samp0.gif'
+                self.images[filename] = np.array(imageio.mimread(filename))[:, :, :, :3]
+        print('Done loading images')
+
     def load_cifar(self):
         with open(self.data_folder + '/train', 'rb') as fo:
             data_dict = pickle.load(fo, encoding='bytes')
@@ -251,6 +273,17 @@ class DataGenerator(object):
         for key in self.image_dict.keys():
             self.image_dict[key] = np.array(self.image_dict[key])
         del images
+
+    def load_pascal(self):
+        print('Loading images into RAM')
+        self.images = {}
+        self.task_images = {}
+        for tfolder in self.task_folders:
+            filepaths = glob.glob(tfolder+'/*.png')
+            self.task_images[tfolder] = filepaths
+            for filepath in filepaths:
+               self.images[filepath] = load_transform_color(filepath, size=self.img_size)
+        print('Done loading images')
 
     def load_permuted_mnist(self):
         print('Loading images into RAM')
@@ -283,7 +316,7 @@ class DataGenerator(object):
         self.cur_task += 1
         if self.cur_task >= self.num_tasks:
             self.num_tasks += 1
-            if 'cifar' in FLAGS.datasource:
+            if 'cifar' in FLAGS.datasource or 'pascal' in FLAGS.datasource:
                 self.cur_task_batch_id = 0
                 self.add_batch()
             else:
@@ -301,6 +334,9 @@ class DataGenerator(object):
         assert 'cont' in FLAGS.datasource
         if 'cifar' in FLAGS.datasource:
             self.task_data[self.cur_task].extend(list(range(self.cur_task_batch_id*10, (self.cur_task_batch_id+1)*10)))
+            self.cur_task_batch_id += 1
+        elif 'pascal' in FLAGS.datasource:
+            self.task_data[self.cur_task].extend(list(range(self.cur_task_batch_id*20, (self.cur_task_batch_id+1)*20)))
             self.cur_task_batch_id += 1
         else:
             self.task_data[self.cur_task].append(self.cur_task_batch_id)
@@ -377,8 +413,8 @@ class DataGenerator(object):
 
         # if not train and not inner SGD, use more samples per task
         if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
-            num_val = (self.num_samples_per_task / 2.) * 3.0/2.0
-            task_index = task_folders[0]
+            num_val = int((self.num_samples_per_task / 2.) * 3.0/2.0)
+            task_index, _ = task_folders[0]
             num_left = len(self.task_data[task_index]) - num_val
             num_train = int(num_left * 2. / 3.)
             num_samples_per_task = num_val + num_train
@@ -415,6 +451,9 @@ class DataGenerator(object):
             # all different comparison images
             comp_images2 = np.array([self.image_dict[img_class][index] for img_class, index in zip(other_classes, comp_images_idx)])
 
+            image_pairs_same = np.concatenate([ref_images[:int(num_samples_per_task/2)], comp_images1], 3)
+            image_pairs_diff = np.concatenate([ref_images[int(num_samples_per_task/2):], comp_images2], 3)
+
             # figure out num_train, num_val
             if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
                 import pdb; pdb.set_trace()
@@ -425,12 +464,10 @@ class DataGenerator(object):
                 image_pairs_diff = np.concatenate([ref_images[int(num_samples_per_task/2):], comp_images2], 3)
                 diff1, diff2 = np.split(image_pairs_diff, 2, 0)
                 labels_diff = np.zeros([int(num_samples_per_task/4),1])
+                label_batch = np.concatenate([labels_same, labels_diff, labels_same, labels_diff], 0)
 
             # make pre update and post update consistent
             img_batch = np.concatenate([same1, diff1, same2, diff2], 0)
-            label_batch = np.concatenate([labels_same, labels_diff, labels_same, labels_diff], 0)
-
-            # TODO - don't forget sigmoid cross entropy, validation batches, 6-channel images, etc.
 
             assert not FLAGS.inner_sgd # not currently supported
 
@@ -440,7 +477,6 @@ class DataGenerator(object):
     """
 
     def generate_cont_push_batch(self, train=True, itr=None):
-        # TODO - support cont_finetune_on_all
         if train:
             if FLAGS.train_only_on_cur:
                 tasks = [list(enumerate(self.tasks))[self.cur_task]]
@@ -460,11 +496,7 @@ class DataGenerator(object):
             num_samples_per_task = num_train + eval_samples_per_task
         else:
             num_samples_per_task = self.num_samples_per_task
-        inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_input], dtype=np.float32)
-        outputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_output], dtype=np.int32)
 
-
-        num_samples_per_task = self.num_samples_per_task
         inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_input], dtype=np.float32)
         state_inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_state_input], dtype=np.float32)
         outputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_output], dtype=np.float32)
@@ -478,37 +510,123 @@ class DataGenerator(object):
                 import pdb; pdb.set_trace()
             val_batches = None
             if not train and FLAGS.baseline != 'oracle':
-                val_batches = available_batches[-1] + 1
+                val_batches = [available_batches[-1] + 1]
             elif not train and FLAGS.baseline == 'oracle':
                 available_batches = [available_batches[-1] + 1]
             assert not FLAGS.inner_sgd
             # first sample one demo
             if val_batches is None:
                 demo_inds = np.random.choice(available_batches, size=2, replace=True)
+            elif val_batches is not None and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+                val_ind = np.random.choice(val_batches)
             else:
                 demo_inds = [np.random.choice(available_batches), np.random.choice(val_batches)]
             # load pickle file
-            with open(self.data_folder + str(task) + '.pkl', 'rb') as pkl_file:
-                pkl = pickle.load(pkl_file)
+            pkl = self.pkls[self.data_folder + str(task) + '.pkl']
+            states = pkl['demoX']
+            vel = False
+            if vel:
+                diff = states[:,1:,:7] - states[:,:-1,:7]
+                actions = np.concatenate([diff, np.expand_dims(states[:,-1,7:14], 1)], 1)
+            else:
                 actions = pkl['demoU']
-                states = pkl['demoX']
-            #if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
-            if FLAGS.cont_finetune_on_all:
-                import pdb; pdb.set_trace()  # not yet supported, need to write code for this
-            timesteps0 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
-            timesteps1 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
-            # select actions from pickle file
-            actions = np.concatenate([actions[demo_inds[0], timesteps0, :], actions[demo_inds[1], timesteps1, :]], 0)
+            if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+                all_actions = []
+                all_states = []
+                all_images = []
+                for demo_batch in available_batches:
+                    timesteps = np.random.choice(np.arange(100), size=int(self.num_samples_per_task/2), replace=False)
+                    all_actions.append(actions[demo_batch, timesteps, :])
+                    all_states.append(states[demo_batch, timesteps, :])
+                    all_images.append(self.images[self.data_folder + 'object_' + str(task) + '/cond' + str(demo_batch) + '.samp0.gif'][timesteps, :, :, :])
+                timesteps = np.random.choice(np.arange(100), size=int(self.num_samples_per_task/2), replace=False)
+                all_actions.append(actions[val_ind, timesteps, :])
+                all_states.append(states[val_ind, timesteps, :])
+                all_images.append(self.images[self.data_folder + 'object_' + str(task) + '/cond' + str(val_ind) + '.samp0.gif'][timesteps, :, :, :])
+                actions = np.concatenate(all_actions, 0)
+                states = np.concatenate(all_states, 0)
+                images = np.concatenate(all_images, 0)
+            else:
+                timesteps0 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
+                timesteps1 = np.random.choice(np.arange(100), size=int(num_samples_per_task/2), replace=False)
+                # select actions from pickle file
+                actions = np.concatenate([actions[demo_inds[0], timesteps0, :], actions[demo_inds[1], timesteps1, :]], 0)
+                states = np.concatenate([states[demo_inds[0], timesteps0, :], states[demo_inds[1], timesteps1, :]], 0)
+                images0 = self.images[self.data_folder + 'object_' + str(task) + '/cond' + str(demo_inds[0]) + '.samp0.gif']
+                images1 = self.images[self.data_folder + 'object_' + str(task) + '/cond' + str(demo_inds[1]) + '.samp0.gif']
+                images = np.concatenate([images0[timesteps0, :, :, :],  images1[timesteps1, :, :, :]], 0)
             outputs[i] = actions
-            states = np.concatenate([states[demo_inds[0], timesteps0, :], states[demo_inds[1], timesteps1, :]], 0)
             state_inputs[i] = states
-            # load images
-            images0 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[0])+'.samp0.gif'))
-            images1 = np.array(imageio.mimread(self.data_folder + 'object_'+str(task)+'/cond'+str(demo_inds[1])+'.samp0.gif'))
-            images = np.concatenate([images0[timesteps0, :, :, :3],  images1[timesteps1, :, :, :3]], 0)
             inputs[i] = images.reshape([num_samples_per_task, -1])
 
         return inputs, outputs, state_inputs, None
+
+    def generate_cont_pascal_batch(self, train=True, itr=None):  # RGB images
+        if train:
+            # Use all tasks so far
+            if FLAGS.train_only_on_cur:
+                task_folders = [list(enumerate(self.task_folders))[self.cur_task]]
+            else:
+                task_folders = list(enumerate(self.task_folders))[:self.num_tasks]
+        else:
+            # Only use the next task # current task
+            # cont_incl_cur: whether or not to meta-train on the current task
+            if FLAGS.cont_incl_cur:
+                task_folders = [list(enumerate(self.task_folders))[self.cur_task]]
+            else:
+                task_folders = [list(enumerate(self.task_folders))[self.cur_task+1]]
+                task_folders[0] = (task_folders[0][0] - 1, task_folders[0][1])
+
+        # if not train and not inner SGD, use more samples per task
+        if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
+            eval_samples_per_task = int(self.num_samples_per_task/2)
+            task_index, tfolder = task_folders[0]
+            available_batches = self.task_data[task_index]
+            image_filepaths = np.array(self.task_images[tfolder])[np.array(available_batches)]
+            num_train = min(len(image_filepaths), 300)  # prevent OOM errors
+            num_samples_per_task = num_train + eval_samples_per_task
+        else:
+            num_samples_per_task = self.num_samples_per_task
+        inputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_input], dtype=np.float32)
+        outputs = np.zeros([self.batch_size, num_samples_per_task, self.dim_output], dtype=np.float32)
+
+        # sample tasks
+        task_folders = [random.choice(task_folders) for _ in range(self.batch_size)]
+
+        for i in range(self.batch_size):
+            task_index, tfolder = task_folders[i]
+            available_batches = self.task_data[task_index]
+            # use self.task_data[task_index]  to figure out which folders can be used
+            image_filepaths = np.array(self.task_images[tfolder])[np.array(available_batches)]
+            val_image_filepaths = None
+            if not train and FLAGS.baseline != 'oracle':
+                val_image_filepaths = self.task_images[tfolder][available_batches[-1]+1:]
+            elif not train and FLAGS.baseline == 'oracle':
+                image_filepaths = self.task_images[tfolder][available_batches[-1]+1:]
+            assert not FLAGS.shuffle_tasks
+            assert not FLAGS.inner_sgd # not currently supported
+
+            # sample num_samples_per_task images, num_samples_per_task should be <= 5
+            if val_image_filepaths is not None:
+                assert not FLAGS.inner_sgd # not supported
+                sampled_filepaths = np.random.choice(image_filepaths, size=num_samples_per_task-int(self.num_samples_per_task/2), replace=False)
+                second_filepaths = np.random.choice(val_image_filepaths, size=int(self.num_samples_per_task/2), replace=False)
+                sampled_filepaths = np.concatenate([sampled_filepaths, second_filepaths])
+            else:
+                sampled_filepaths = np.random.choice(image_filepaths, size=num_samples_per_task, replace=False)
+            #images = [np.reshape(np.array(load_transform_color(filename, size=self.img_size)), (-1)) for filename in sampled_filepaths]
+            images = [np.reshape(np.array(self.images[filename]), (-1)) for filename in sampled_filepaths]
+            inputs[i] = np.array(images)
+
+            # extract label, convert to one-hot
+            img_names = [sampled_filepaths[i][sampled_filepaths[i].rfind('/')+1:-4] for i in range(num_samples_per_task)]
+            labels = [np.array(img_name.split('_')) for img_name in img_names]
+            labels = np.float32(np.array(labels))
+            sin_cos = np.array([[np.sin(angle), np.cos(angle)] for angle in labels[:,-1]])
+            outputs[i, :, :2] = labels[:,:2]
+            outputs[i, :, 2:] = sin_cos
+
+        return inputs, outputs, None, None
 
 
 

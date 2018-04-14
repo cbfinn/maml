@@ -131,22 +131,32 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         # **NORMAL is % 1k, % 25
         # **SLOW is % 2k, % 50
         # **EXTRASLOW is % 4k, % 100
+        # pushing is 2000, 200
         TASK_ITER = 1000
-        BATCH_ITER = 25
-        if FLAGS.update_batch_size == 50:
-            BATCH_ITER = 50  # TODO - this might not be enough, since val might try to eval over just the next 20
-        if 'cifar' in FLAGS.datasource:
-            BATCH_ITER = 25
+        BATCH_ITER = 50
         # initialize continual learning at this iteration
-        #if 'cifar' in FLAGS.datasource:
-        #    BATCH_ITER *= 2
-        INIT_CONT = TASK_ITER / 2
+        if 'cifar' in FLAGS.datasource:
+            TASK_ITER = 1000
+            BATCH_ITER = 25
+            #BATCH_ITER *= 2
+            INIT_CONT = TASK_ITER / 2
+        elif 'pascal' in FLAGS.datasource:
+            TASK_ITER = 1000
+            BATCH_ITER = 50
+            INIT_CONT = 50
+        elif 'push' in FLAGS.datasource:
+            TASK_ITER=2000
+            BATCH_ITER=200
+            INIT_CONT = TASK_ITER #TASK_ITER / 2
+        else:
+            INIT_CONT = TASK_ITER / 2
         if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
             if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
+                if 'pascal' in FLAGS.datasource:
+                    data_generator.add_batch()
                 data_generator.add_task()
-                # NEW reinitialize adam vars
-                #sess.run(tf.variables_initializer(adam_vars))
-                #tf.global_variables_initializer().run()
+                if FLAGS.train_only_on_cur:
+                    sess.run(tf.global_variables_initializer())  # needed for independent, also needed in other scenarios
             elif itr % BATCH_ITER == 0:
                 data_generator.add_batch()
         feed_dict = {}
@@ -401,7 +411,7 @@ def main():
 
     dim_output = data_generator.dim_output
     if FLAGS.baseline == 'oracle' or FLAGS.baseline == 'online' or FLAGS.baseline == 'incl_task':
-        assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource or 'cont' in FLAGS.datasource
+        #assert FLAGS.datasource == 'sinusoid' or 'siamese' in FLAGS.datasource or 'mnist' in FLAGS.datasource or 'push' in FLAGS.datasource or 'cifar' in FLAGS.datasource
         if FLAGS.datasource == 'sinusoid':
             dim_input = 3
         else:

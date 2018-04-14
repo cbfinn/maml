@@ -16,7 +16,7 @@ from utils import mse, xent, conv_block, residual_conv_block, normalize, sigmoid
 FLAGS = flags.FLAGS
 
 class MAML:
-    def __init__(self, dim_input=1, dim_output=1, test_num_updates=5, dim_state_input=None):
+    def __init__(self, dim_input=1, dim_output=1, test_num_updates=5, dim_state_input=0):
         """ must call construct_model() after initializing MAML! """
         self.dim_input = dim_input
         self.dim_output = dim_output
@@ -39,9 +39,17 @@ class MAML:
             self.forward = self.forward_fp
             self.construct_weights = self.construct_fp_weights
             self.channels = 3
-
-        elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist'] or 'permuted' in FLAGS.datasource:
-            if 'siamese' in FLAGS.datasource:
+        elif 'pascal' in FLAGS.datasource:
+            self.loss_func = mse
+            self.dim_hidden = FLAGS.num_filters
+            #self.forward = self.forward_conv
+            #self.construct_weights = self.construct_conv_weights
+            self.forward = self.forward_fp
+            self.construct_weights = self.construct_fp_weights
+            self.channels = 3
+            self.img_size = int(np.sqrt(self.dim_input/self.channels))
+        elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist']:
+            if 'siamese' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
                 self.loss_func = sigmoid_xent
             else:
                 self.loss_func = xent
@@ -464,7 +472,8 @@ class MAML:
         fc_input = tf.concat(axis=1, values=[fc_input, context])
         fc_output = fc_input
         # for state input
-        fc_output = tf.concat(axis=1, values=[fc_output, state_input])
+        if state_input is not None:
+            fc_output = tf.concat(axis=1, values=[fc_output, state_input])
         for i in range(self.n_layers):
             fc_output = tf.matmul(fc_output, weights['w_%d' % i]) + weights['b_%d' % i]
             if i != self.n_layers - 1:
@@ -589,7 +598,7 @@ class MAML:
 
     def forward_conv(self, inp, weights, reuse=False, scope='', ind=None, **kwargs):
         # reuse is for the normalization parameters.
-        if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
+        if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource or 'pascal' in FLAGS.datasource:
             channels = 3 # TODO - don't hardcode.
         elif 'siamese' in FLAGS.datasource:
             channels = 2
