@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 
 from tensorflow.python.platform import flags
-from utils import mse, xent, conv_block, normalize, sigmoid_xent, safe_get, init_conv_weights_xavier, init_bias, init_weights
+from utils import mse, xent, conv_block, residual_conv_block, normalize, sigmoid_xent, safe_get, init_conv_weights_xavier, init_bias, init_weights
 
 FLAGS = flags.FLAGS
 
@@ -47,6 +47,12 @@ class MAML:
                 self.dim_hidden = [200, 200] #[256, 128, 64, 64]
                 self.forward=self.forward_fc
                 self.construct_weights = self.construct_fc_weights
+
+            # cifar uses resnet
+            if 'cifar' in FLAGS.datasource:
+                self.forward = self.forward_conv_resnet18
+                self.construct_weights = self.construct_conv_resnet18_weights
+
             if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
                 self.channels = 3
             #elif 'cifar' in FLAGS.datasource:
@@ -503,6 +509,76 @@ class MAML:
             weights['w5'] = tf.Variable(tf.random_normal([self.dim_hidden, self.dim_output]), name='w5')
             weights['b5'] = tf.Variable(tf.zeros([self.dim_output]), name='b5')
         return weights
+
+    def construct_conv_resnet18_weights(self):
+        weights = {}
+
+        dtype = tf.float32
+        conv_initializer =  tf.contrib.layers.xavier_initializer_conv2d(dtype=dtype)
+        fc_initializer = tf.contrib.layers.xavier_initializer(dtype=dtype)
+        k = 3
+        nf = 20
+
+        weights['conv1'] = tf.get_variable('conv1', [k, k, self.channels, nf], initializer=conv_initializer, dtype=dtype)
+        weights['b1'] = tf.Variable(tf.zeros([nf]))
+
+        weights['conv2a'] = tf.get_variable('conv2a', [k, k, nf, nf], initializer=conv_initializer, dtype=dtype)
+        weights['b2a'] = tf.Variable(tf.zeros([nf]))
+        weights['conv2b'] = tf.get_variable('conv2b', [k, k, nf, nf], initializer=conv_initializer, dtype=dtype)
+        weights['b2b'] = tf.Variable(tf.zeros([nf]))
+        weights['conv2c'] = tf.get_variable('conv2c', [1, 1, nf, nf], initializer=conv_initializer, dtype=dtype)
+        weights['b2c'] = tf.Variable(tf.zeros([nf]))
+
+        weights['conv3a'] = tf.get_variable('conv3a', [k, k, nf, nf*2], initializer=conv_initializer, dtype=dtype)
+        weights['b3a'] = tf.Variable(tf.zeros([nf*2]))
+        weights['conv3b'] = tf.get_variable('conv3b', [k, k, nf*2, nf*2], initializer=conv_initializer, dtype=dtype)
+        weights['b3b'] = tf.Variable(tf.zeros([nf*2]))
+        weights['conv3c'] = tf.get_variable('conv3c', [1, 1, nf, nf*2], initializer=conv_initializer, dtype=dtype)
+        weights['b3c'] = tf.Variable(tf.zeros([nf*2]))
+
+        weights['conv4a'] = tf.get_variable('conv4a', [k, k, nf*2, nf*4], initializer=conv_initializer, dtype=dtype)
+        weights['b4a'] = tf.Variable(tf.zeros([nf*4]))
+        weights['conv4b'] = tf.get_variable('conv4b', [k, k, nf*4, nf*4], initializer=conv_initializer, dtype=dtype)
+        weights['b4b'] = tf.Variable(tf.zeros([nf*4]))
+        weights['conv4c'] = tf.get_variable('conv4c', [1, 1, nf*2, nf*4], initializer=conv_initializer, dtype=dtype)
+        weights['b4c'] = tf.Variable(tf.zeros([nf*4]))
+
+        weights['conv5a'] = tf.get_variable('conv5a', [k, k, nf*4, nf*8], initializer=conv_initializer, dtype=dtype)
+        weights['b5a'] = tf.Variable(tf.zeros([nf*8]))
+        weights['conv5b'] = tf.get_variable('conv5b', [k, k, nf*8, nf*8], initializer=conv_initializer, dtype=dtype)
+        weights['b5b'] = tf.Variable(tf.zeros([nf*8]))
+        weights['conv5c'] = tf.get_variable('conv5c', [1, 1, nf*4, nf*8], initializer=conv_initializer, dtype=dtype)
+        weights['b5c'] = tf.Variable(tf.zeros([nf*8]))
+
+        weights['w6'] = tf.get_variable('w6', [nf*8, self.dim_output], initializer=fc_initializer)
+        weights['b6'] = tf.Variable(tf.zeros([self.dim_output]), name='b6')
+        return weights
+
+
+
+    def forward_conv_resnet18(self, inp, weights, reuse=False, scope='', ind=None, **kwargs):
+        if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
+            channels = 3 # TODO - don't hardcode.
+        inp = tf.reshape(inp, [-1, self.img_size, self.img_size, channels])
+
+        h1 = conv_block(inp, weights['conv1'], weights['b1'], reuse, scope+'0', None)
+        w2 = [weights['conv2'+x] for x in ['a','b','c']]
+        b2 = [weights['b2'+x] for x in ['a','b','c']]
+        h2 = residual_conv_block(h1, w2, b2, reuse, scope+'1', [None]*3, incl_stride=False)
+        w3 = [weights['conv3'+x] for x in ['a','b','c']]
+        b3 = [weights['b3'+x] for x in ['a','b','c']]
+        h3 = residual_conv_block(h2, w3, b3, reuse, scope+'2', [None]*3)
+        w4 = [weights['conv4'+x] for x in ['a','b','c']]
+        b4 = [weights['b4'+x] for x in ['a','b','c']]
+        h4 = residual_conv_block(h3, w4, b4, reuse, scope+'3', [None]*3)
+        w5 = [weights['conv5'+x] for x in ['a','b','c']]
+        b5 = [weights['b5'+x] for x in ['a','b','c']]
+        h5 = residual_conv_block(h4, w5, b5, reuse, scope+'4', [None]*3)
+        h6 = tf.reduce_mean(h5, [-3,-2])
+
+        # inputs are returned for visualization purposes
+        return tf.matmul(h6, weights['w6']) + weights['b6'], None
+
 
     def forward_conv(self, inp, weights, reuse=False, scope='', ind=None, **kwargs):
         # reuse is for the normalization parameters.

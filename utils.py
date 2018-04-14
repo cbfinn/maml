@@ -38,6 +38,22 @@ def conv_block(inp, cweight, bweight, reuse, scope, bn_vars=None, incl_stride=Tr
         normed = tf.nn.max_pool(normed, stride, stride, 'VALID')
     return normed
 
+def residual_conv_block(inp, cweight, bweight, reuse, scope, bn_vars=None, incl_stride=True, activation=tf.nn.relu):
+    if incl_stride:
+        stride = [1,2,2,1]
+    else:
+        stride = [1,1,1,1]
+    no_stride = [1,1,1,1]
+    conv1 = tf.nn.conv2d(inp, cweight[0], stride, 'SAME') + bweight[0]
+    conv1 = normalize(conv1, activation, reuse, scope + 'a', bn_vars=bn_vars[0])
+    conv2 = tf.nn.conv2d(conv1, cweight[1], no_stride, 'SAME') + bweight[1]
+    conv2 = normalize(conv2, tf.identity, reuse, scope + 'b', bn_vars=bn_vars[1])
+
+    shortcut = tf.nn.conv2d(inp, cweight[2], stride, 'SAME') + bweight[2]
+    shortcut = normalize(shortcut, tf.identity, reuse, scope + 'c', bn_vars=bn_vars[2])
+
+    return activation(conv2 + shortcut)
+
 
 def init_conv_weights_xavier(shape, name=None):
     conv_initializer =  tf.contrib.layers.xavier_initializer_conv2d(dtype=tf.float32)
@@ -90,13 +106,13 @@ def mse(pred, label, multiplier=1.0, sine_x=None, loss_weights=None, postupdate=
             hidden = tf.nn.relu(tf.matmul(hidden, loss_weights['lw2']) + loss_weights['lb2'])
             preloss = tf.square(tf.matmul(hidden, loss_weights['lw3']) + loss_weights['lb3'])
             learned_loss = tf.reduce_mean(preloss)
-            if FLAGS.semisup_loss: 
+            if FLAGS.semisup_loss:
                 #true_loss = tf.reduce_mean(tf.square(tf.reshape(pred, [-1]) - tf.reshape(label, [-1])))
                 # fix to only predict y, not task
                 true_loss = tf.reduce_mean(tf.square(tf.reshape(pred[:,0], [-1]) - tf.reshape(label[:,0], [-1])))
                 if FLAGS.train:
                     pick_loss = tf.cast(tf.random_uniform((1,)) > 0.5, tf.float32)
-                else: 
+                else:
                     pick_loss = 1.0
                 return pick_loss*learned_loss + (1.0-pick_loss)*true_loss
             else:
