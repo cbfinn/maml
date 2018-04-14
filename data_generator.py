@@ -46,42 +46,70 @@ class DataGenerator(object):
             self.input_range = config.get('input_range', [-5.0, 5.0])
             self.dim_input = 1
             self.dim_output = 1
-        elif 'cifar' in FLAGS.datasource: # includes siamese_cifar
-            #self.generate = self.generate_omniglot_batch
+        # 5-way classification version of cifar
+        # add 5 classes at a time, with two examples per class.
+        elif 'cifar' in FLAGS.datasource:
             assert 'cont' in FLAGS.datasource
-            self.generate = self.generate_cont_cifar_batch
-            self.num_classes = 1  # by default 1 (only relevant for classification problems)
             self.img_size = config.get('img_size', (32, 32))
-            self.dim_input = np.prod(self.img_size)*2*3  # two color images passed in.
-            self.dim_output = 1
-            # data that is pre-resized using PIL with lanczos filter
+            self.dim_input = np.prod(self.img_size)*3  # two color images passed in.
+            self.dim_output = 5
+            self.num_classes = 5
+
             self.data_folder = config.get('data_folder', './data/cifar-100-python')
+            self.load_cifar()
             self.task_folders = list(range(100))
             random.seed(1)
-            random.shuffle(self.task_folders) 
-            # dataset has 24 batches per task, each batch has one image
+            random.shuffle(self.task_folders)
+
+            self.generate = self.generate_cont_cifar_batch
+            # dataset has 95 batches per task, each batch has five images (per class: 475 images for training, 25 for eval)
             self.cur_task = 19 # current task, indexes into self.task_folders
-            self.cur_task_batch_id = 10  # number of batches for the current task
+            self.cur_task_batch_id = 19  # number of batches for the current task
             self.num_tasks = 20   # total number of tasks with data so far
             self.task_data = defaultdict(list)
             for i in range(self.num_tasks):
                 if i < self.cur_task:
-                    self.task_data[i] = list(range(24*20))
+                    self.task_data[i] = list(range(40*10))
                 else:
-                    self.task_data[i] = list(range(24*(self.cur_task_batch_id+1)))
- 
-            #self.task_data[self.cur_task].extend(list(range(self.cur_task_batch_id*12, (self.cur_task_batch_id+1)*12)))
-            #self.cur_task_batch_id += 1
-            #character_folders = [os.path.join(data_folder, family, character) \
-            #    for family in os.listdir(data_folder) \
-            #    if os.path.isdir(os.path.join(data_folder, family)) \
-            #    for character in os.listdir(os.path.join(data_folder, family))]
-            #random.seed(1)
-            #random.shuffle(character_folders)
-            #num_train = config.get('num_train', 1200)
-            #self.metatrain_character_folders = character_folders[:num_train]
-            #self.metaval_character_folders = character_folders[num_train:]
-            self.load_cifar()
+                    self.task_data[i] = list(range((self.cur_task_batch_id+1)*10))
+
+        # binary classifier version of cifar
+        #elif 'cifar' in FLAGS.datasource: # includes siamese_cifar
+        #    #self.generate = self.generate_omniglot_batch
+        #    assert 'cont' in FLAGS.datasource
+        #    self.generate = self.generate_cont_cifar_batch
+        #    self.num_classes = 1  # by default 1 (only relevant for classification problems)
+        #    self.img_size = config.get('img_size', (32, 32))
+        #    self.dim_input = np.prod(self.img_size)*2*3  # two color images passed in.
+        #    self.dim_output = 1
+        #    # data that is pre-resized using PIL with lanczos filter
+        #    self.data_folder = config.get('data_folder', './data/cifar-100-python')
+        #    self.task_folders = list(range(100))
+        #    random.seed(1)
+        #    random.shuffle(self.task_folders)
+        #    # dataset has 24 batches per task, each batch has one image
+        #    self.cur_task = 19 # current task, indexes into self.task_folders
+        #    self.cur_task_batch_id = 10  # number of batches for the current task
+        #    self.num_tasks = 20   # total number of tasks with data so far
+        #    self.task_data = defaultdict(list)
+        #    for i in range(self.num_tasks):
+        #        if i < self.cur_task:
+        #            self.task_data[i] = list(range(24*20))
+        #        else:
+        #            self.task_data[i] = list(range(24*(self.cur_task_batch_id+1)))
+
+        #    #self.task_data[self.cur_task].extend(list(range(self.cur_task_batch_id*12, (self.cur_task_batch_id+1)*12)))
+        #    #self.cur_task_batch_id += 1
+        #    #character_folders = [os.path.join(data_folder, family, character) \
+        #    #    for family in os.listdir(data_folder) \
+        #    #    if os.path.isdir(os.path.join(data_folder, family)) \
+        #    #    for character in os.listdir(os.path.join(data_folder, family))]
+        #    #random.seed(1)
+        #    #random.shuffle(character_folders)
+        #    #num_train = config.get('num_train', 1200)
+        #    #self.metatrain_character_folders = character_folders[:num_train]
+        #    #self.metaval_character_folders = character_folders[num_train:]
+        #    self.load_cifar()
         elif 'mnist' in FLAGS.datasource and 'rainbow' not in FLAGS.datasource:
             self.generate = self.generate_mnist_batch
             self.img_size = config.get('img_size', (28, 28))
@@ -115,13 +143,13 @@ class DataGenerator(object):
             else:
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
-        elif 'push' in FLAGS.datasource:   
+        elif 'push' in FLAGS.datasource:
             assert FLAGS.update_batch_size == 20 # TODO - update batch size of 20?
-            self.img_size = config.get('img_size', 125) 
+            self.img_size = config.get('img_size', 125)
             self.dim_input = self.img_size*self.img_size* 3
             self.dim_state_input = 20
             self.dim_output = 7 #self.num_classes
-            self.generate = self.generate_cont_push_batch 
+            self.generate = self.generate_cont_push_batch
             self.data_folder = '/media/drive3tb/paired_consistent_push_demos/'
             self.tasks = [int(filename[filename.rfind('/')+1:-4]) for filename in glob.glob(self.data_folder + '*.pkl')]
             # dataset has 12 batches per task, each batch has 1 demonstration
@@ -133,7 +161,7 @@ class DataGenerator(object):
                 self.task_data[i] = list(range(self.cur_task_batch_id))
         elif 'permuted' in FLAGS.datasource:
             self.generate = self.generate_cont_rainbow_mnist_batch # same format
-            self.num_classes = 1 
+            self.num_classes = 1
             self.dim_output = 10 #self.num_classes
             self.dim_input = 28*28*2
             data_folder = config.get('data_folder', '/home/cfinn/contpermuted_mnist20/')
@@ -149,7 +177,7 @@ class DataGenerator(object):
             self.load_permuted_mnist()
         elif 'rainbow_mnist' in FLAGS.datasource:
             # number of classes should be set to 1 for rainbow_mnist ( but dim output is 10 )
-            self.num_classes = 1 
+            self.num_classes = 1
             assert FLAGS.num_classes == 1
             self.img_size = config.get('img_size', (28, 28))
             self.dim_input = np.prod(self.img_size) * 3
@@ -247,7 +275,7 @@ class DataGenerator(object):
            for filepath in image_filepaths:
                self.images[filepath] = load_transform_color(filepath, size=self.img_size)
         print('Done loading images')
- 
+
     # CIFAR - 500 images per task, 40 batches per task
     def add_task(self):
         # Performance on current task is satisfactory. Move on to next task.
@@ -256,25 +284,80 @@ class DataGenerator(object):
         if self.cur_task >= self.num_tasks:
             self.num_tasks += 1
             if 'cifar' in FLAGS.datasource:
-                self.cur_task_batch_id = 0 
+                self.cur_task_batch_id = 0
                 self.add_batch()
             else:
                 self.cur_task_batch_id = 1
                 self.task_data[self.cur_task] = [0]
+                if FLAGS.update_batch_size == 50:
+                    self.cur_task_batch_id = 6
+                    self.task_data[self.cur_task] = [0,1,2,3,4,5]
         else:
-            self.cur_task_batch_id = 10 
+            self.cur_task_batch_id = 10
 
     # for cifar, add 12 images (batches don't exist)
     def add_batch(self):
         # Need to add more data for the current task
         assert 'cont' in FLAGS.datasource
         if 'cifar' in FLAGS.datasource:
-            self.task_data[self.cur_task].extend(list(range(self.cur_task_batch_id*24, (self.cur_task_batch_id+1)*24)))
+            self.task_data[self.cur_task].extend(list(range(self.cur_task_batch_id*10, (self.cur_task_batch_id+1)*10)))
             self.cur_task_batch_id += 1
         else:
             self.task_data[self.cur_task].append(self.cur_task_batch_id)
             self.cur_task_batch_id += 1
 
+    def generate_cont_cifar_batch(self, train=True, itr=None):  # RGB images
+        task_folders = list(enumerate(self.task_folders))[:self.num_tasks]
+
+        assert not FLAGS.cont_finetune_on_all  # not supported right now.
+        assert not FLAGS.train_only_on_cur  # not supported right now.
+        assert FLAGS.cont_incl_cur # only thing supported right now
+        num_samples_per_task = self.num_samples_per_task
+        num_train = num_val = int(num_samples_per_task / 2)
+        inputs = np.zeros([self.batch_size, num_samples_per_task*5, self.dim_input], dtype=np.float32)
+        outputs = np.zeros([self.batch_size, num_samples_per_task*5, self.dim_output], dtype=np.int32)
+
+        # task batch
+        for batch_i in range(self.batch_size):
+            # sample sets of 5 image classes
+            if train:
+                classes= random.sample(task_folders, 5)
+            else:
+                classes = random.sample(task_folders[:-1], 4)
+                classes.append(task_folders[-1])
+            random.shuffle(classes)
+
+            # get images
+            all_images = []
+            if train:
+                for class_id, class_folder in classes:
+                    image_idx = np.random.choice(self.task_data[class_id], size=num_samples_per_task)
+                    class_images = self.image_dict[class_folder][image_idx]
+                    np.random.shuffle(class_images)
+                    all_images.append(class_images)
+            else: # TODO - for test with MAML, the first batch should come from the training classes.
+                # first half of the batch should be from existing data, if we aren't oracle
+                for class_id, class_folder in classes:
+                    image_idx = np.random.choice(range(-29,0), size=num_samples_per_task)
+                    class_images = self.image_dict[class_folder][image_idx]
+                    np.random.shuffle(class_images)
+                    all_images.append(class_images)
+
+            image_id = 0
+            for k in range(num_samples_per_task):
+                class_idxs = list(range(self.num_classes))
+                random.shuffle(class_idxs)
+                for class_idx in class_idxs:
+                    inputs[batch_i, image_id, :] = np.reshape(all_images[class_idx][k], [self.dim_input])
+                    outputs[batch_i, image_id, class_idx] = 1
+                    image_id += 1
+
+        return inputs, outputs, None, None
+
+
+
+
+    """
     def generate_cont_cifar_batch(self, train=True, itr=None):  # RGB images
         if train:
             # Use all tasks so far
@@ -298,7 +381,7 @@ class DataGenerator(object):
             task_index = task_folders[0]
             num_left = len(self.task_data[task_index]) - num_val
             num_train = int(num_left * 2. / 3.)
-            num_samples_per_task = num_val + num_train 
+            num_samples_per_task = num_val + num_train
         else:
             num_samples_per_task = self.num_samples_per_task
             num_train = num_val = int(num_samples_per_task / 2)
@@ -333,13 +416,13 @@ class DataGenerator(object):
             comp_images2 = np.array([self.image_dict[img_class][index] for img_class, index in zip(other_classes, comp_images_idx)])
 
             # figure out num_train, num_val
-            if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all: 
+            if not train and not FLAGS.inner_sgd and FLAGS.baseline != 'oracle' and FLAGS.cont_finetune_on_all:
                 import pdb; pdb.set_trace()
             else:
-                image_pairs_same = np.concatenate([ref_images[:int(num_samples_per_task/2)], comp_images1], 3)           
+                image_pairs_same = np.concatenate([ref_images[:int(num_samples_per_task/2)], comp_images1], 3)
                 same1, same2 = np.split(image_pairs_same, 2, 0)
                 labels_same = np.ones([int(num_samples_per_task/4),1])
-                image_pairs_diff = np.concatenate([ref_images[int(num_samples_per_task/2):], comp_images2], 3)           
+                image_pairs_diff = np.concatenate([ref_images[int(num_samples_per_task/2):], comp_images2], 3)
                 diff1, diff2 = np.split(image_pairs_diff, 2, 0)
                 labels_diff = np.zeros([int(num_samples_per_task/4),1])
 
@@ -348,13 +431,13 @@ class DataGenerator(object):
             label_batch = np.concatenate([labels_same, labels_diff, labels_same, labels_diff], 0)
 
             # TODO - don't forget sigmoid cross entropy, validation batches, 6-channel images, etc.
-            
+
             assert not FLAGS.inner_sgd # not currently supported
 
             inputs[batch_i] = img_batch.reshape([num_samples_per_task, -1])
             outputs[batch_i] = label_batch
         return inputs, outputs, None, None
-
+    """
 
     def generate_cont_push_batch(self, train=True, itr=None):
         # TODO - support cont_finetune_on_all
@@ -399,7 +482,7 @@ class DataGenerator(object):
             elif not train and FLAGS.baseline == 'oracle':
                 available_batches = [available_batches[-1] + 1]
             assert not FLAGS.inner_sgd
-            # first sample one demo 
+            # first sample one demo
             if val_batches is None:
                 demo_inds = np.random.choice(available_batches, size=2, replace=True)
             else:
@@ -442,7 +525,7 @@ class DataGenerator(object):
             # Only use the next task # current task
             # cont_incl_cur: whether or not to meta-train on the current task
             if FLAGS.cont_incl_cur:
-                task_folders = [list(enumerate(self.task_folders))[self.cur_task]]
+                task_folders = list(enumerate(self.task_folders))[self.cur_task:]
             else:
                 task_folders = [list(enumerate(self.task_folders))[self.cur_task+1]]
                 task_folders[0] = (task_folders[0][0] - 1, task_folders[0][1])
@@ -485,7 +568,7 @@ class DataGenerator(object):
                 image_filepaths = [os.path.join(tfolder, str(batch), family, img_name)
                     for family in os.listdir(os.path.join(tfolder, str(batch))) \
                     for img_name in os.listdir(os.path.join(tfolder, str(batch), family))]
-            assert not FLAGS.shuffle_tasks 
+            assert not FLAGS.shuffle_tasks
             assert not FLAGS.inner_sgd # not currently supported
 
             # sample num_samples_per_task images, num_samples_per_task should be <= 5
@@ -593,7 +676,7 @@ class DataGenerator(object):
     def get_sinusoid_amp_range(self, itr, train=True):
         if FLAGS.datadistr == 'stationary':
             if train:
-                return self.amp_range 
+                return self.amp_range
             else:
                 return [5.0,10.0]
         elif FLAGS.datadistr == 'continual5':
@@ -692,9 +775,9 @@ class DataGenerator(object):
         outputs = np.zeros([batch_size, self.num_samples_per_task, self.dim_output], dtype=np.int32)
 
         if train:
-            imgs, labels = self.mnist.train.next_batch(self.num_samples_per_task*batch_size) 
+            imgs, labels = self.mnist.train.next_batch(self.num_samples_per_task*batch_size)
         else:
-            imgs, labels = self.mnist.validation.next_batch(self.num_samples_per_task*batch_size) 
+            imgs, labels = self.mnist.validation.next_batch(self.num_samples_per_task*batch_size)
         for i in range(batch_size):
             begin = i*self.num_samples_per_task
             end = (i+1)*self.num_samples_per_task
@@ -702,7 +785,7 @@ class DataGenerator(object):
             if FLAGS.incl_switch and random.uniform(0,1) > 0.5:
                 task_imgs_reshaped = np.reshape(task_imgs, [self.num_samples_per_task,28,28])
                 # switch top and bottom of image (or left and right?)
-                task_imgs = np.reshape(np.concatenate([task_imgs_reshaped[:,14:,:], task_imgs_reshaped[:,:14,:]], 1) , [self.num_samples_per_task, -1]) 
+                task_imgs = np.reshape(np.concatenate([task_imgs_reshaped[:,14:,:], task_imgs_reshaped[:,:14,:]], 1) , [self.num_samples_per_task, -1])
             task_labels = labels[begin:end]
             task_tform = self.sample_img_transform()
             tformed = np.array([np.reshape(transform.warp(np.reshape(img, (28,28,1)),task_tform), (-1)) for img in task_imgs])

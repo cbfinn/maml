@@ -133,15 +133,19 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
         # **EXTRASLOW is % 4k, % 100
         TASK_ITER = 1000
         BATCH_ITER = 25
-        # initialize continual learning at this iteration
+        if FLAGS.update_batch_size == 50:
+            BATCH_ITER = 50  # TODO - this might not be enough, since val might try to eval over just the next 20
         if 'cifar' in FLAGS.datasource:
-            BATCH_ITER *= 2
+            BATCH_ITER = 25
+        # initialize continual learning at this iteration
+        #if 'cifar' in FLAGS.datasource:
+        #    BATCH_ITER *= 2
         INIT_CONT = TASK_ITER / 2
         if itr >= INIT_CONT and 'cont' in FLAGS.datasource:  # used to be itr > 1000 and itr % 100
             if itr >= TASK_ITER/2 and itr % TASK_ITER == 0:
                 data_generator.add_task()
                 # NEW reinitialize adam vars
-                #sess.run(tf.variables_initializer(adam_vars)) 
+                #sess.run(tf.variables_initializer(adam_vars))
                 #tf.global_variables_initializer().run()
             elif itr % BATCH_ITER == 0:
                 data_generator.add_batch()
@@ -154,13 +158,13 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                   batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
                   for i in range(FLAGS.meta_batch_size):
                       batch_x[i, :, 1] = amp[i]
-                      batch_x[i, :, 2] = phase[i] 
+                      batch_x[i, :, 2] = phase[i]
             if FLAGS.pred_task:
                 if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
                   batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
                   for i in range(FLAGS.meta_batch_size):
                       batch_y[i, :, 1] = amp[i]
-                      batch_y[i, :, 2] = phase[i] 
+                      batch_y[i, :, 2] = phase[i]
             if FLAGS.baseline == 'online' and itr % 2 == 1:
                 batch_x, batch_y, amp, phase = last_batch
             elif FLAGS.baseline == 'online':
@@ -224,13 +228,13 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                       batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
                       for i in range(FLAGS.meta_batch_size):
                           batch_x[i, :, 1] = amp[i]
-                          batch_x[i, :, 2] = phase[i] 
+                          batch_x[i, :, 2] = phase[i]
                 if FLAGS.pred_task:
                     if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
                       batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
                       for i in range(FLAGS.meta_batch_size):
                           batch_y[i, :, 1] = amp[i]
-                          batch_y[i, :, 2] = phase[i] 
+                          batch_y[i, :, 2] = phase[i]
 
                 # using -train_examples for val.
                 # finetune_on_all means include all data thus far
@@ -268,7 +272,7 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
     random.seed(1)
 
     metaval_accuracies = []
-    train_examples = num_classes * FLAGS.update_batch_size   
+    train_examples = num_classes * FLAGS.update_batch_size
     if FLAGS.inner_sgd:
         train_examples *= max(test_num_updates, FLAGS.num_updates)
 
@@ -289,8 +293,8 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
                   batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
                   for i in range(FLAGS.meta_batch_size):
                       batch_y[0, :, 1] = amp[0]
-                      batch_y[0, :, 2] = phase[0] 
- 
+                      batch_y[0, :, 2] = phase[0]
+
             inputa = batch_x[:, :train_examples, :]
             inputb = batch_x[:,train_examples:, :]
             labela = batch_y[:, :train_examples, :]

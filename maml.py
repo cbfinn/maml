@@ -34,7 +34,7 @@ class MAML:
             self.channels = 3
 
         elif 'omniglot' in FLAGS.datasource or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource or FLAGS.datasource in ['miniimagenet','mnist'] or 'permuted' in FLAGS.datasource:
-            if 'siamese' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
+            if 'siamese' in FLAGS.datasource:
                 self.loss_func = sigmoid_xent
             else:
                 self.loss_func = xent
@@ -47,10 +47,10 @@ class MAML:
                 self.dim_hidden = [200, 200] #[256, 128, 64, 64]
                 self.forward=self.forward_fc
                 self.construct_weights = self.construct_fc_weights
-            if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource:
+            if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
                 self.channels = 3
-            elif 'cifar' in FLAGS.datasource:
-                self.channels = 6   # 2 images
+            #elif 'cifar' in FLAGS.datasource:
+            #    self.channels = 6   # 2 images
             elif 'siamese' in FLAGS.datasource:
                 self.channels = 2   # 2 images
             else:
@@ -157,7 +157,7 @@ class MAML:
                 if FLAGS.inner_sgd:
                     c = FLAGS.update_batch_size * FLAGS.num_classes
                     task_inputas = [task_inputa[c*i:c*(i+1), :] for i in range(num_updates)]
-                    task_labelas = [task_labela[c*i:c*(i+1), :] for i in range(num_updates)] 
+                    task_labelas = [task_labela[c*i:c*(i+1), :] for i in range(num_updates)]
                     if 'push' in FLAGS.datasource:
                         task_stateas = [task_statea[c*i:c*(i+1), :] for i in range(num_updates)]
                 else:
@@ -212,7 +212,7 @@ class MAML:
                 task_output = [task_outputa, task_outputbs, task_lossa, task_lossesb]
 
                 if self.classification:
-                    if 'siamese' not in FLAGS.datasource and 'cifar' not in FLAGS.datasource:
+                    if 'siamese' not in FLAGS.datasource: # and 'cifar' not in FLAGS.datasource:
                         task_accuracya = tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_outputa), 1), tf.argmax(task_labelas[0], 1))
                         for j in range(num_updates):
                             task_accuraciesb.append(tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_outputbs[j]), 1), tf.argmax(task_labelb, 1)))
@@ -311,24 +311,24 @@ class MAML:
         if FLAGS.label_in_loss:
             pred = tf.concat([pred,label], -1)
             #pred = tf.nn.softmax(pred) - label
-        fc_init =  tf.contrib.layers.xavier_initializer(dtype=tf.float32)   
+        fc_init =  tf.contrib.layers.xavier_initializer(dtype=tf.float32)
         if 'loss_weights' not in dir(self) or self.loss_weights is None:
             hidden_dim = 40
             self.loss_weights = {}
             if FLAGS.label_in_loss:
-                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1')  
+                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1')
             else:
-                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1') 
-            #self.loss_weights['w2'] = tf.Variable(fc_init([hidden_dim, 1]), name='loss_w2')  
-            self.loss_weights['b1'] = tf.Variable(tf.zeros([40]), name='loss_b1') 
-            #self.loss_weights['b2'] = tf.Variable(tf.zeros([1]), name='loss_b2') 
-        #hidden = tf.nn.relu(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])  
-        #loss = tf.square(tf.matmul(hidden, self.loss_weights['w2']) + self.loss_weights['b2'])  
-        # don't square this?  
-        #loss = tf.square(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])  
+                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1')
+            #self.loss_weights['w2'] = tf.Variable(fc_init([hidden_dim, 1]), name='loss_w2')
+            self.loss_weights['b1'] = tf.Variable(tf.zeros([40]), name='loss_b1')
+            #self.loss_weights['b2'] = tf.Variable(tf.zeros([1]), name='loss_b2')
+        #hidden = tf.nn.relu(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])
+        #loss = tf.square(tf.matmul(hidden, self.loss_weights['w2']) + self.loss_weights['b2'])
+        # don't square this?
+        #loss = tf.square(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])
         # logit mse
         loss = tf.reduce_sum(tf.square(pred))
-        return loss   
+        return loss
 
     def construct_loss_weights(self):
         dtype = tf.float32
@@ -425,7 +425,7 @@ class MAML:
         inp = tf.reshape(inp, [-1, self.img_size, self.img_size, self.channels])
 
 
-        conv_layer = inp 
+        conv_layer = inp
         for i in range(self.n_conv_layers):
             conv_layer = conv_block(conv_layer, weights['wc%d' % (i+1)], weights['bc%d' % (i+1)], reuse=reuse, scope=str(i))
         _, num_rows, num_cols, num_fp = conv_layer.get_shape()
@@ -506,12 +506,12 @@ class MAML:
 
     def forward_conv(self, inp, weights, reuse=False, scope='', ind=None, **kwargs):
         # reuse is for the normalization parameters.
-        if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource:
+        if FLAGS.datasource == 'miniimagenet' or 'rainbow' in FLAGS.datasource or 'cifar' in FLAGS.datasource:
             channels = 3 # TODO - don't hardcode.
         elif 'siamese' in FLAGS.datasource:
             channels = 2
-        elif 'cifar' in FLAGS.datasource:
-            channels = 6
+        #elif 'cifar' in FLAGS.datasource:
+        #    channels = 6
         else:
             channels = 1
         if FLAGS.baseline == 'contextual':
