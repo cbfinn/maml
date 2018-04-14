@@ -1,7 +1,14 @@
 """ Code for the MAML algorithm and network definitions. """
+from __future__ import print_function
 import numpy as np
 #import special_grads
+import sys
 import tensorflow as tf
+try:
+    import special_grads
+except KeyError as e:
+    print('WARN: Cannot define MaxPoolGrad, likely already defined for this version of tensorflow: %s' % e,
+          file=sys.stderr)
 
 from tensorflow.python.platform import flags
 from utils import mse, xent, conv_block, residual_conv_block, normalize, sigmoid_xent, safe_get, init_conv_weights_xavier, init_bias, init_weights

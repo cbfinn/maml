@@ -337,7 +337,7 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
 
     out_filename = FLAGS.logdir +'/'+ exp_string + '/' + 'test_ubs' + str(FLAGS.update_batch_size) + '_stepsize' + str(FLAGS.update_lr) + '.csv'
     out_pkl = FLAGS.logdir +'/'+ exp_string + '/' + 'test_ubs' + str(FLAGS.update_batch_size) + '_stepsize' + str(FLAGS.update_lr) + '.pkl'
-    with open(out_pkl, 'w') as f:
+    with open(out_pkl, 'wb') as f:
         pickle.dump({'mses': metaval_accuracies}, f)
     with open(out_filename, 'w') as f:
         writer = csv.writer(f, delimiter=',')

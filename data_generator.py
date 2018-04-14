@@ -139,9 +139,9 @@ class DataGenerator(object):
             num_train = config.get('num_train', 1200) - num_val
             self.metatrain_character_folders = character_folders[:num_train]
             if FLAGS.test_set:
-                self.metaval_character_folders = character_folders[num_train:num_train+num_val]
-            else:
                 self.metaval_character_folders = character_folders[num_train+num_val:]
+            else:
+                self.metaval_character_folders = character_folders[num_train:num_train+num_val]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
         elif 'push' in FLAGS.datasource:
             assert FLAGS.update_batch_size == 20 # TODO - update batch size of 20?
@@ -620,7 +620,7 @@ class DataGenerator(object):
         image_reader = tf.WholeFileReader()
         _, image_file = image_reader.read(filename_queue)
         if FLAGS.datasource == 'miniimagenet':
-            image = tf.image.decode_jpeg(image_file)
+            image = tf.image.decode_jpeg(image_file, channels=3)
             image.set_shape((self.img_size[0],self.img_size[1],3))
             image = tf.reshape(image, [self.dim_input])
             image = tf.cast(image, tf.float32) / 255.0

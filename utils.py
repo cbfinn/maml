@@ -87,7 +87,10 @@ def normalize(inp, activation, reuse, scope, bn_vars=None):
     elif FLAGS.norm == 'layer_norm':
         return tf_layers.layer_norm(inp, activation_fn=activation, reuse=reuse, scope=scope)
     elif FLAGS.norm == 'None':
-        return activation(inp)
+        if activation is not None:
+            return activation(inp)
+        else:
+            return inp
 
 
 
@@ -135,7 +138,7 @@ def xent(pred, label, **kwargs):
     # Note - with tf version <=0.12, this loss has incorrect 2nd derivatives
     label *= 0.9
     label += 0.01
-    return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label)) # / FLAGS.update_batch_size
+    return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label)) / FLAGS.update_batch_size
 
 def sigmoid_xent(pred, label, **kwargs):
     return tf.nn.sigmoid_cross_entropy_with_logits(logits=pred, labels=label) / FLAGS.update_batch_size
@@ -170,8 +173,6 @@ def load_transform_color(image_path, angle=0., s=(0, 0), size=(20, 20)):
         rotated = imresize(rotated, size=size, interp='lanczos')
 
     return rotated
-
-
 
 
 
