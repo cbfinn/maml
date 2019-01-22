@@ -155,7 +155,7 @@ class MAML:
                 if FLAGS.inner_sgd:
                     c = FLAGS.update_batch_size * FLAGS.num_classes
                     task_inputas = [task_inputa[c*i:c*(i+1), :] for i in range(num_updates)]
-                    task_labelas = [task_labela[c*i:c*(i+1), :] for i in range(num_updates)] 
+                    task_labelas = [task_labela[c*i:c*(i+1), :] for i in range(num_updates)]
                     if 'push' in FLAGS.datasource:
                         task_stateas = [task_statea[c*i:c*(i+1), :] for i in range(num_updates)]
                 else:
@@ -272,7 +272,9 @@ class MAML:
                     else:
                         meta_objective = self.total_losses2[FLAGS.num_updates-1] + self.total_loss1
                 else:
-                    meta_objective = self.total_losses2[FLAGS.num_updates-1]
+                    ## THIS IS FOR THE BASELINE THAT ARAVIND WANTS
+                    meta_objective = self.total_loss1
+                    #meta_objective = self.total_losses2[FLAGS.num_updates-1]
                 self.gvs = gvs = optimizer.compute_gradients(meta_objective, var_list=var_list)
                 if FLAGS.datasource == 'miniimagenet':
                     gvs = [(tf.clip_by_value(grad, -10, 10), var) for grad, var in gvs]
@@ -309,24 +311,24 @@ class MAML:
         if FLAGS.label_in_loss:
             pred = tf.concat([pred,label], -1)
             #pred = tf.nn.softmax(pred) - label
-        fc_init =  tf.contrib.layers.xavier_initializer(dtype=tf.float32)   
+        fc_init =  tf.contrib.layers.xavier_initializer(dtype=tf.float32)
         if 'loss_weights' not in dir(self) or self.loss_weights is None:
             hidden_dim = 40
             self.loss_weights = {}
             if FLAGS.label_in_loss:
-                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1')  
+                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1')
             else:
-                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1') 
-            #self.loss_weights['w2'] = tf.Variable(fc_init([hidden_dim, 1]), name='loss_w2')  
-            self.loss_weights['b1'] = tf.Variable(tf.zeros([40]), name='loss_b1') 
-            #self.loss_weights['b2'] = tf.Variable(tf.zeros([1]), name='loss_b2') 
-        #hidden = tf.nn.relu(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])  
-        #loss = tf.square(tf.matmul(hidden, self.loss_weights['w2']) + self.loss_weights['b2'])  
-        # don't square this?  
-        #loss = tf.square(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])  
+                self.loss_weights['w1'] = tf.Variable(fc_init([self.dim_output, hidden_dim]), name='loss_w1')
+            #self.loss_weights['w2'] = tf.Variable(fc_init([hidden_dim, 1]), name='loss_w2')
+            self.loss_weights['b1'] = tf.Variable(tf.zeros([40]), name='loss_b1')
+            #self.loss_weights['b2'] = tf.Variable(tf.zeros([1]), name='loss_b2')
+        #hidden = tf.nn.relu(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])
+        #loss = tf.square(tf.matmul(hidden, self.loss_weights['w2']) + self.loss_weights['b2'])
+        # don't square this?
+        #loss = tf.square(tf.matmul(pred, self.loss_weights['w1']) + self.loss_weights['b1'])
         # logit mse
         loss = tf.reduce_sum(tf.square(pred))
-        return loss   
+        return loss
 
     def construct_loss_weights(self):
         dtype = tf.float32
@@ -423,7 +425,7 @@ class MAML:
         inp = tf.reshape(inp, [-1, self.img_size, self.img_size, self.channels])
 
 
-        conv_layer = inp 
+        conv_layer = inp
         for i in range(self.n_conv_layers):
             conv_layer = conv_block(conv_layer, weights['wc%d' % (i+1)], weights['bc%d' % (i+1)], reuse=reuse, scope=str(i))
         _, num_rows, num_cols, num_fp = conv_layer.get_shape()
