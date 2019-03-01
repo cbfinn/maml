@@ -20,7 +20,7 @@ i = 0
 
 for image_file in all_images:
     im = Image.open(image_file)
-    im = im.resize((28,28), resample=Image.LANCZOS)
+    im = im.convert('L').resize((28,28), resample=Image.LANCZOS)
     im.save(image_file)
     i += 1
 
