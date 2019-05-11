@@ -96,13 +96,13 @@ class DataGenerator(object):
             else:
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             self.rotations = config.get('rotations', [0, 90, 180, 270])
-        elif 'push' in FLAGS.datasource:   
+        elif 'push' in FLAGS.datasource:
             assert FLAGS.update_batch_size == 20 # TODO - update batch size of 20?
-            self.img_size = config.get('img_size', 125) 
+            self.img_size = config.get('img_size', 125)
             self.dim_input = self.img_size*self.img_size* 3
             self.dim_state_input = 20
             self.dim_output = 7 #self.num_classes
-            self.generate = self.generate_cont_push_batch 
+            self.generate = self.generate_cont_push_batch
             self.data_folder = '/media/drive3tb/paired_consistent_push_demos/'
             self.tasks = [int(filename[filename.rfind('/')+1:-4]) for filename in glob.glob(self.data_folder + '*.pkl')]
             # dataset has 12 batches per task, each batch has 1 demonstration
@@ -114,7 +114,7 @@ class DataGenerator(object):
                 self.task_data[i] = list(range(self.cur_task_batch_id))
         elif 'rainbow_mnist' in FLAGS.datasource:
             # number of classes should be set to 1 for rainbow_mnist ( but dim output is 10 )
-            self.num_classes = 1 
+            self.num_classes = 1
             assert FLAGS.num_classes == 1
             self.img_size = config.get('img_size', (28, 28))
             self.dim_input = np.prod(self.img_size) * 3
@@ -125,7 +125,7 @@ class DataGenerator(object):
                 data_folder = config.get('data_folder', '/home/cfinn/' + FLAGS.datasource +'/')
                 # this will be continually added to, but it will start with 8 folders and 10 batches per folder
                 self.task_folders = [os.path.join(data_folder, task) for task in os.listdir(data_folder)]
-                random.seed(1)
+                random.seed(FLAGS.cont_seed)
                 random.shuffle(self.task_folders)
 
                 # cur task = 0, num_tasks = 1 for 0
@@ -186,7 +186,7 @@ class DataGenerator(object):
            for filepath in image_filepaths:
                self.images[filepath] = load_transform_color(filepath, size=self.img_size)
         print('Done loading images')
-  
+
     def add_task(self):
         # Performance on current task is satisfactory. Move on to next task.
         assert 'cont' in FLAGS.datasource
@@ -196,7 +196,7 @@ class DataGenerator(object):
             self.cur_task_batch_id = 1
             self.task_data[self.cur_task] = [0]
         else:
-            self.cur_task_batch_id = 10 
+            self.cur_task_batch_id = 10
         print(self.task_data)
 
     def add_batch(self):
@@ -248,7 +248,7 @@ class DataGenerator(object):
             elif not train and FLAGS.baseline == 'oracle':
                 available_batches = [available_batches[-1] + 1]
             assert not FLAGS.inner_sgd
-            # first sample one demo 
+            # first sample one demo
             if val_batches is None:
                 demo_inds = np.random.choice(available_batches, size=2, replace=True)
             else:
@@ -334,7 +334,7 @@ class DataGenerator(object):
                 image_filepaths = [os.path.join(tfolder, str(batch), family, img_name)
                     for family in os.listdir(os.path.join(tfolder, str(batch))) \
                     for img_name in os.listdir(os.path.join(tfolder, str(batch), family))]
-            assert not FLAGS.shuffle_tasks 
+            assert not FLAGS.shuffle_tasks
             assert not FLAGS.inner_sgd # not currently supported
 
             # sample num_samples_per_task images, num_samples_per_task should be <= 5
@@ -439,7 +439,7 @@ class DataGenerator(object):
     def get_sinusoid_amp_range(self, itr, train=True):
         if FLAGS.datadistr == 'stationary':
             if train:
-                return self.amp_range 
+                return self.amp_range
             else:
                 return [5.0,10.0]
         elif FLAGS.datadistr == 'continual5':
@@ -538,9 +538,9 @@ class DataGenerator(object):
         outputs = np.zeros([batch_size, self.num_samples_per_task, self.dim_output], dtype=np.int32)
 
         if train:
-            imgs, labels = self.mnist.train.next_batch(self.num_samples_per_task*batch_size) 
+            imgs, labels = self.mnist.train.next_batch(self.num_samples_per_task*batch_size)
         else:
-            imgs, labels = self.mnist.validation.next_batch(self.num_samples_per_task*batch_size) 
+            imgs, labels = self.mnist.validation.next_batch(self.num_samples_per_task*batch_size)
         for i in range(batch_size):
             begin = i*self.num_samples_per_task
             end = (i+1)*self.num_samples_per_task
@@ -548,7 +548,7 @@ class DataGenerator(object):
             if FLAGS.incl_switch and random.uniform(0,1) > 0.5:
                 task_imgs_reshaped = np.reshape(task_imgs, [self.num_samples_per_task,28,28])
                 # switch top and bottom of image (or left and right?)
-                task_imgs = np.reshape(np.concatenate([task_imgs_reshaped[:,14:,:], task_imgs_reshaped[:,:14,:]], 1) , [self.num_samples_per_task, -1]) 
+                task_imgs = np.reshape(np.concatenate([task_imgs_reshaped[:,14:,:], task_imgs_reshaped[:,:14,:]], 1) , [self.num_samples_per_task, -1])
             task_labels = labels[begin:end]
             task_tform = self.sample_img_transform()
             tformed = np.array([np.reshape(transform.warp(np.reshape(img, (28,28,1)),task_tform), (-1)) for img in task_imgs])

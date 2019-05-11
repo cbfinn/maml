@@ -273,8 +273,11 @@ class MAML:
                         meta_objective = self.total_losses2[FLAGS.num_updates-1] + self.total_loss1
                 else:
                     ## THIS IS FOR THE BASELINE THAT ARAVIND WANTS
-                    meta_objective = self.total_loss1
-                    #meta_objective = self.total_losses2[FLAGS.num_updates-1]
+                    if FLAGS.aravind:
+                      meta_objective = self.total_loss1
+                      assert FLAGS.cont_incl_cur == False
+                    else:
+                      meta_objective = self.total_losses2[FLAGS.num_updates-1]
                 self.gvs = gvs = optimizer.compute_gradients(meta_objective, var_list=var_list)
                 if FLAGS.datasource == 'miniimagenet':
                     gvs = [(tf.clip_by_value(grad, -10, 10), var) for grad, var in gvs]

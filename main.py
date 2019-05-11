@@ -22,6 +22,17 @@ Usage Instructions:
     To run evaluation, use the '--train=False' flag and the '--test_set=True' flag to use the test set.
 
     For omniglot and miniimagenet training, acquire the dataset online, put it in the correspoding data directory, and see the python script instructions in that directory to preprocess the data.
+
+
+
+    To run rainbow MNIST comparison for Aravind, run:
+        python3 main.py --datasource=contrainbow_mnist20 --cont_incl_cur=False  --metatrain_iterations=1000000 --num_updates=5 --update_lr=0.1 --update_batch_size=10 --num_classes=1 --logdir=logs/aravind_seed2 --num_filters=32 --aravind=True --cont_seed=2
+    To run rainbow MNIST our method, run:
+        python3 main.py --datasource=contrainbow_mnist20 --cont_incl_cur=True  --metatrain_iterations=1000000 --num_updates=5 --update_lr=0.1 --update_batch_size=10 --num_classes=1 --logdir=logs/ftml_seed2 --num_filters=32 --cont_seed=2
+    To run rainbow MNIST from scratch, change to 4000/100 in main and run:
+        python3 main.py --datasource=contrainbow_mnist20  --metatrain_iterations=1000000 --num_updates=1 --update_lr=0.1 --update_batch_size=10 --num_classes=1 --logdir=logs/indep4k_seed2 --num_filters=32  --cont_seed=2 --train_only_on_cur=True --cont_finetune_on_all=False --baseline=oracle
+    To run rainbow MNIST TOE, run:
+    python3 main.py --datasource=contrainbow_mnist20  --metatrain_iterations=1000000 --num_updates=1 --update_lr=0.1 --update_batch_size=10 --num_classes=1 --logdir=logs/toe2k_seed2 --num_filters=32  --cont_seed=2 --cont_finetune_on_all=False --baseline=oracle
 """
 import csv
 import glob
@@ -44,6 +55,8 @@ flags.DEFINE_integer('num_classes', 5, 'number of classes used in classification
 # contextual means to concatenate the meta-training set as input (channel-wise concat if images)
 flags.DEFINE_string('baseline', None, 'oracle, online, incl_task, contextual, or None')
 flags.DEFINE_bool('context_var', False, 'whether or not to include context variable to append to input')
+flags.DEFINE_bool('aravind', False, 'whether to be running comparison for Aravind')
+flags.DEFINE_integer('cont_seed', 1, 'seed for task order.')
 
 flags.DEFINE_bool('pred_task', False, 'whether or not to predict the task context rather than the label for inner update')
 flags.DEFINE_bool('learn_loss', False, 'whether or not to use a learned loss (only supported with pred_task and sinusoid)')
@@ -117,6 +130,8 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
     print('Done initializing, starting training.')
     prelosses, postlosses = [], []
 
+    sess.graph.finalize()
+
     num_classes = data_generator.num_classes # for classification, 1 otherwise
     multitask_weights, reg_weights = [], []
     inputa, inputb, labela, labelb = None, None, None, None
@@ -149,13 +164,13 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                   batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
                   for i in range(FLAGS.meta_batch_size):
                       batch_x[i, :, 1] = amp[i]
-                      batch_x[i, :, 2] = phase[i] 
+                      batch_x[i, :, 2] = phase[i]
             if FLAGS.pred_task:
                 if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
                   batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
                   for i in range(FLAGS.meta_batch_size):
                       batch_y[i, :, 1] = amp[i]
-                      batch_y[i, :, 2] = phase[i] 
+                      batch_y[i, :, 2] = phase[i]
             if FLAGS.baseline == 'online' and itr % 2 == 1:
                 batch_x, batch_y, amp, phase = last_batch
             elif FLAGS.baseline == 'online':
@@ -219,13 +234,13 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
                       batch_x = np.concatenate([batch_x, np.zeros([batch_x.shape[0], batch_x.shape[1], 2])], 2)
                       for i in range(FLAGS.meta_batch_size):
                           batch_x[i, :, 1] = amp[i]
-                          batch_x[i, :, 2] = phase[i] 
+                          batch_x[i, :, 2] = phase[i]
                 if FLAGS.pred_task:
                     if 'sinusoid' in FLAGS.datasource: # siamese already has task id encoded in the input
                       batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
                       for i in range(FLAGS.meta_batch_size):
                           batch_y[i, :, 1] = amp[i]
-                          batch_y[i, :, 2] = phase[i] 
+                          batch_y[i, :, 2] = phase[i]
 
                 # using -train_examples for val.
                 # finetune_on_all means include all data thus far
@@ -263,7 +278,7 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
     random.seed(1)
 
     metaval_accuracies = []
-    train_examples = num_classes * FLAGS.update_batch_size   
+    train_examples = num_classes * FLAGS.update_batch_size
     if FLAGS.inner_sgd:
         train_examples *= max(test_num_updates, FLAGS.num_updates)
 
@@ -284,8 +299,8 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
                   batch_y = np.concatenate([batch_y, np.zeros([batch_y.shape[0], batch_y.shape[1], 2])], 2)
                   for i in range(FLAGS.meta_batch_size):
                       batch_y[0, :, 1] = amp[0]
-                      batch_y[0, :, 2] = phase[0] 
- 
+                      batch_y[0, :, 2] = phase[0]
+
             inputa = batch_x[:, :train_examples, :]
             inputb = batch_x[:,train_examples:, :]
             labela = batch_y[:, :train_examples, :]
@@ -522,8 +537,9 @@ def main():
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
         sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     else:
-        #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1.0)
-        sess = tf.Session()
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.5)
+        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+        #sess = tf.Session()
     with sess.as_default():
         tf.global_variables_initializer().run()
         tf.train.start_queue_runners()
