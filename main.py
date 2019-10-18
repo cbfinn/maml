@@ -29,7 +29,7 @@ Usage Instructions:
         python3 main.py --datasource=contrainbow_mnist20 --cont_incl_cur=False  --metatrain_iterations=1000000 --num_updates=5 --update_lr=0.1 --update_batch_size=10 --num_classes=1 --logdir=logs/aravind_seed2 --num_filters=32 --aravind=True --cont_seed=2
     To run rainbow MNIST our method, run:
         python3 main.py --datasource=contrainbow_mnist20 --cont_incl_cur=True  --metatrain_iterations=1000000 --num_updates=5 --update_lr=0.1 --update_batch_size=10 --num_classes=1 --logdir=logs/ftml_seed2 --num_filters=32 --cont_seed=2
-    To run rainbow MNIST from scratch, change to 4000/100 in main and run:
+    To run rainbow MNIST from scratch, change to TASK_ITER/BATCH_ITER to 4000/100 in main and run:
         python3 main.py --datasource=contrainbow_mnist20  --metatrain_iterations=1000000 --num_updates=1 --update_lr=0.1 --update_batch_size=10 --num_classes=1 --logdir=logs/indep4k_seed2 --num_filters=32  --cont_seed=2 --train_only_on_cur=True --cont_finetune_on_all=False --baseline=oracle
     To run rainbow MNIST TOE, run:
     python3 main.py --datasource=contrainbow_mnist20  --metatrain_iterations=1000000 --num_updates=1 --update_lr=0.1 --update_batch_size=10 --num_classes=1 --logdir=logs/toe2k_seed2 --num_filters=32  --cont_seed=2 --cont_finetune_on_all=False --baseline=oracle
