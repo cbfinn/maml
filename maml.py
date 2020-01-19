@@ -67,6 +67,27 @@ class MAML:
             else:
                 # Define the weights
                 self.weights = weights = self.construct_weights()
+                if FLAGS.mc:
+                    self.mc = {}
+                    self.mc_f = {}
+                    self.mc_in = {}
+                    self.mc_out = {}
+                    for key in self.weights.keys():
+                        shape = self.weights[key].shape
+                        if len(shape) == 1:
+                            self.mc[key] = tf.get_variable('{}_mc'.format(key), self.weights[key].shape, initializer=tf.constant_initializer(1.0))
+                        elif len(shape) == 2:
+                            n_in = shape[0].value
+                            n_out = shape[1].value
+                            self.mc_in[key] = tf.get_variable('{}_mc_in'.format(key), initializer=tf.diag([1.0]*n_in))
+                            self.mc_out[key] = tf.get_variable('{}_mc_out'.format(key), initializer=tf.diag([1.0]*n_out))
+                        else:
+                            n_in = shape[2].value
+                            n_out = shape[3].value
+                            n_f = int(np.prod(shape).value/(n_in*n_out))
+                            self.mc_f[key] = tf.get_variable('{}_mc_f'.format(key), initializer=tf.diag([1.0]*n_f))
+                            self.mc_in[key] = tf.get_variable('{}_mc_in'.format(key), initializer=tf.diag([1.0]*n_in))
+                            self.mc_out[key] = tf.get_variable('{}_mc_out'.format(key), initializer=tf.diag([1.0]*n_out))
 
             # outputbs[i] and lossesb[i] is the output and loss after i+1 gradient updates
             lossesa, outputas, lossesb, outputbs = [], [], [], []
@@ -75,6 +96,25 @@ class MAML:
             outputbs = [[]]*num_updates
             lossesb = [[]]*num_updates
             accuraciesb = [[]]*num_updates
+            def transform_gradients(gradients):
+                for key in self.weights.keys():
+                    shape = self.weights[key].shape
+                    if len(shape) == 1:
+                        gradients[key] = self.mc[key]*gradients[key]
+                    elif len(shape) == 2:
+                        n_in = shape[0].value
+                        n_out = shape[1].value
+                        temp  = tf.matmul(self.mc_in[key], gradients[key])
+                        gradients[key] = tf.matmul(temp, self.mc_out[key])
+                    else:
+                        n_in = shape[2].value
+                        n_out = shape[3].value
+                        n_f = int(np.prod(shape).value/(n_in*n_out))
+                        temp = tf.matmul(tf.reshape(gradients[key],[-1,n_out]), self.mc_out[key])
+                        temp = tf.reshape(tf.matmul(self.mc_f[key], tf.reshape(temp,[n_f,-1])), [n_f, n_in, n_out])
+                        temp = tf.matmul(self.mc_in[key], tf.reshape(tf.transpose(temp, [1,0,2]), [n_in, -1]))
+                        gradients[key] = tf.reshape(tf.transpose(tf.reshape(temp, [n_in, n_f, n_out]),[1,0,2]), shape)
+                return gradients
 
             def task_metalearn(inp, reuse=True):
                 """ Perform gradient descent for one task in the meta-batch. """
@@ -91,6 +131,10 @@ class MAML:
                 if FLAGS.stop_grad:
                     grads = [tf.stop_gradient(grad) for grad in grads]
                 gradients = dict(zip(weights.keys(), grads))
+
+                if FLAGS.mc:
+                    gradients = transform_gradients(gradients)
+
                 fast_weights = dict(zip(weights.keys(), [weights[key] - self.update_lr*gradients[key] for key in weights.keys()]))
                 output = self.forward(inputb, fast_weights, reuse=True)
                 task_outputbs.append(output)
@@ -102,6 +146,8 @@ class MAML:
                     if FLAGS.stop_grad:
                         grads = [tf.stop_gradient(grad) for grad in grads]
                     gradients = dict(zip(fast_weights.keys(), grads))
+                    if FLAGS.mc:
+                        gradients = transform_gradients(gradients)
                     fast_weights = dict(zip(fast_weights.keys(), [fast_weights[key] - self.update_lr*gradients[key] for key in fast_weights.keys()]))
                     output = self.forward(inputb, fast_weights, reuse=True)
                     task_outputbs.append(output)

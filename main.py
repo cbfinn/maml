@@ -1,5 +1,8 @@
 """
 Usage Instructions:
+    10-shot sinusoid with the meta-curvature:
+        python main.py --datasource=sinusoid --logdir=logs/sine/ --metatrain_iterations=70000 --norm=None --update_batch_size=10 --mc=True
+
     10-shot sinusoid:
         python main.py --datasource=sinusoid --logdir=logs/sine/ --metatrain_iterations=70000 --norm=None --update_batch_size=10
 
@@ -43,6 +46,9 @@ flags.DEFINE_integer('num_classes', 5, 'number of classes used in classification
 # oracle means task id is input (only suitable for sinusoid)
 flags.DEFINE_string('baseline', None, 'oracle, or None')
 
+# meta-curvature
+flags.DEFINE_bool('mc', False, 'Whether to use meta-curvature')
+
 ## Training options
 flags.DEFINE_integer('pretrain_iterations', 0, 'number of pre-training iterations.')
 flags.DEFINE_integer('metatrain_iterations', 15000, 'number of metatraining iterations.') # 15k for omniglot, 50k for sinusoid
@@ -73,7 +79,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
     SUMMARY_INTERVAL = 100
     SAVE_INTERVAL = 1000
     if FLAGS.datasource == 'sinusoid':
-        PRINT_INTERVAL = 1000
+        PRINT_INTERVAL = 100
         TEST_PRINT_INTERVAL = PRINT_INTERVAL*5
     else:
         PRINT_INTERVAL = 100
@@ -328,6 +334,9 @@ def main():
 
     tf.global_variables_initializer().run()
     tf.train.start_queue_runners()
+
+    if FLAGS.mc:
+        exp_string += '.mc'
 
     if FLAGS.resume or not FLAGS.train:
         model_file = tf.train.latest_checkpoint(FLAGS.logdir + '/' + exp_string)
