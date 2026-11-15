@@ -331,6 +331,9 @@ def main():
 
     if FLAGS.resume or not FLAGS.train:
         model_file = tf.train.latest_checkpoint(FLAGS.logdir + '/' + exp_string)
+        if model_file is None and not FLAGS.train:
+            raise ValueError('No checkpoint found in ' + FLAGS.logdir + '/' + exp_string +
+                             ' to test. Check --logdir and the flags that determine the experiment folder name.')
         if FLAGS.test_iter > 0:
             model_file = model_file[:model_file.index('model')] + 'model' + str(FLAGS.test_iter)
         if model_file:
